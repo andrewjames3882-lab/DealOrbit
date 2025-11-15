@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temporary files
+*.log
+*.tmp
+*.swp
+*~
+
+# Server and tunnel files
+cloudflared
+cloudflared.tgz
+ngrok
+ngrok.zip
+*.pid
+
+# Scripts (optional - you can include them if you want)
+# start-public-server.sh
+# share-website.sh
+# get-public-url.sh
+
+# IDE
+.vscode/
+.idea/
+*.sublime-*
+

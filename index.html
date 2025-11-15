@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DealOrbit - Equitable Finance Deal Distribution</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+<body>
+
+    <!-- Settings Page (Full Page) -->
+    <div class="settings-page" id="settingsPage" style="display: none;">
+        <div class="settings-page-header">
+            <div>
+                <h1>Settings</h1>
+                <p class="settings-label">Control Center</p>
+            </div>
+            <button class="settings-close" id="settingsCloseBtn" aria-label="Close settings">&times;</button>
+        </div>
+
+        <div class="settings-page-content">
+            <!-- User Management Section (Admin Only) -->
+            <section class="settings-section" id="settingsUserManagement" style="display: none;">
+            <h3>User Management</h3>
+            <p class="settings-description">Add, edit, and manage user accounts and their roles. Admin access only.</p>
+            
+            <div style="margin-bottom: 20px;">
+                <button id="addUserBtn" class="settings-submit" style="width: auto; margin-bottom: 16px;">Add New User</button>
+                <input type="text" id="searchUsersInput" placeholder="Search users..." class="search-input" style="width: 100%; margin-bottom: 16px;" />
+            </div>
+            
+            <!-- Purchase Plan Info -->
+            <div class="plan-info" id="planInfo" style="background: #e6f7fd; padding: 16px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #72CFF4;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+                    <div>
+                        <strong style="color: #333334;">Current Plan:</strong>
+                        <span id="currentPlanName" style="color: #72CFF4; font-weight: 600; margin-left: 8px;">Standard</span>
+                        <span style="color: #6b7280; margin-left: 16px;">Users: <span id="currentUserCount">0</span> / <span id="maxUsers">10</span></span>
+                    </div>
+                    <button id="upgradePlanBtn" class="secondary-btn" style="width: auto; margin-top: 0;">Upgrade Plan</button>
+                </div>
+            </div>
+
+            <!-- Add/Edit User Form (Hidden by default) -->
+            <div id="userFormContainer" style="display: none; background: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #e5e7eb;">
+                <h4 id="userFormTitle" style="margin-bottom: 16px; color: #333334; font-size: 1.1em;">Add New User</h4>
+                <form id="userForm" class="user-form">
+                    <input type="hidden" id="editingUserId" value="">
+                    <div style="display: flex; flex-direction: column; gap: 12px;">
+                        <label>
+                            Full Name *
+                            <input type="text" id="userName" required placeholder="John Doe" />
+                        </label>
+                        <label>
+                            Email Address *
+                            <input type="email" id="userEmail" required placeholder="john@example.com" />
+                        </label>
+                        <label>
+                            Username *
+                            <input type="text" id="userUsername" required placeholder="johndoe" pattern="[a-zA-Z0-9_]+" title="Username can only contain letters, numbers, and underscores" />
+                            <small style="color: #6b7280; font-size: 11px; margin-top: 4px; display: block;">Letters, numbers, and underscores only</small>
+                        </label>
+                        <label>
+                            Phone Number *
+                            <input type="tel" id="userPhone" required placeholder="(555) 123-4567" />
+                        </label>
+                        <label>
+                            Company/Dealership *
+                            <input type="text" id="userCompany" required placeholder="ABC Motors" />
+                        </label>
+                        <label>
+                            User Role *
+                            <select id="userRole" required>
+                                <option value="">Select Role</option>
+                                <option value="admin">Admin</option>
+                                <option value="desk">Desk Manager</option>
+                                <option value="finance">Finance Manager</option>
+                            </select>
+                        </label>
+                        <label id="passwordLabel" style="display: none;">
+                            Password (leave blank to keep current)
+                            <input type="password" id="userPassword" placeholder="Leave blank to keep current" />
+                            <small style="color: #6b7280; font-size: 11px; margin-top: 4px; display: block;">Leave blank to keep current password</small>
+                        </label>
+                        <label id="passwordConfirmLabel" style="display: none;">
+                            Confirm Password
+                            <input type="password" id="userPasswordConfirm" placeholder="Confirm password" />
+                        </label>
+                        <div id="passwordInfo" style="background: #e6f7fd; padding: 12px; border-radius: 8px; margin-top: 8px; border: 1px solid #72CFF4;">
+                            <small style="color: #333334; font-size: 12px;">ℹ️ Password will be set when the user logs in for the first time.</small>
+                        </div>
+                    </div>
+                    <div class="form-actions" style="margin-top: 16px;">
+                        <button type="submit" class="settings-submit" id="userSubmitBtn">Add User</button>
+                        <button type="button" class="settings-cancel" id="userCancelBtn">Cancel</button>
+                    </div>
+                    <p class="signup-error" id="userFormError" style="display: none; color: #dc2626; text-align: center; margin-top: 10px; font-size: 13px;"></p>
+                </form>
+            </div>
+
+            <!-- Current Users Section -->
+            <div id="currentUsersSection" style="margin-top: 32px;">
+                <h3 style="margin-bottom: 20px; color: #333334;">Current Users</h3>
+                <div id="usersGrid" class="users-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px;">
+                    <!-- User cards will be appended here -->
+                </div>
+            </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Top Navigation Bar -->
+    <nav class="top-nav" id="topNav">
+        <div class="nav-container">
+            <div class="nav-left">
+                <div class="logo-wrapper" aria-label="DealOrbit logo">
+                    <img src="logo.svg" alt="DealOrbit logo" loading="lazy">
+                </div>
+            </div>
+            <div class="nav-center">
+                <a href="#solutions" class="nav-link" data-section="solutions">SOLUTIONS</a>
+                <a href="#features" class="nav-link" data-section="features">FEATURES</a>
+                <a href="#about" class="nav-link" data-section="about">ABOUT</a>
+            </div>
+            <div class="nav-right">
+                <a href="#login" class="nav-link" id="navLoginLink">LOGIN</a>
+                <a href="#" class="nav-link" id="navLogoutLink" style="display: none;">LOGOUT</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Landing Page Sections (hidden when logged in) -->
+    <div id="landingPageContent">
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="hero-container">
+            <div class="hero-content">
+                <h1 class="hero-headline">
+                    <span class="highlight-primary">ROTATE</span> THE DEALS, 
+                    <span class="highlight-primary">DISTRIBUTE</span> THE PROFIT
+                </h1>
+                <p class="hero-description">
+                    DealOrbit's Rotation Management System helps dealerships ensure fair and equitable distribution of finance deals. Automatically rotate opportunities among your F&I managers, track every deal, and maintain complete transparency in your finance department.
+                </p>
+                <button class="cta-button primary-cta" id="getStartedBtn">GET STARTED</button>
+            </div>
+            <div class="hero-visual">
+                <div class="dashboard-preview">
+                    <div class="preview-header">DealOrbit Dashboard</div>
+                    <div class="preview-content">
+                        <div class="preview-item">
+                            <span class="preview-icon">👤</span>
+                            <span class="preview-name">Next: Sarah Johnson</span>
+                            <span class="preview-time">2:30 PM</span>
+                        </div>
+                        <div class="preview-item">
+                            <span class="preview-icon">👤</span>
+                            <span class="preview-name">Mike Chen</span>
+                            <span class="preview-time">1:15 PM</span>
+                        </div>
+                        <div class="preview-item">
+                            <span class="preview-icon">👤</span>
+                            <span class="preview-name">Emily Rodriguez</span>
+                            <span class="preview-time">12:45 PM</span>
+                        </div>
+                        <div class="preview-item active">
+                            <span class="preview-icon">⭐</span>
+                            <span class="preview-name">Current: David Kim</span>
+                            <span class="preview-time">Now</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Feature Bar -->
+    <section class="feature-bar">
+        <div class="feature-bar-container">
+            <span class="feature-question">UNFAIR DEAL DISTRIBUTION?</span>
+            <span class="feature-question">MANUAL ROTATION ERRORS?</span>
+            <span class="feature-question">LACK OF ACCOUNTABILITY?</span>
+            <span class="feature-question">NO DEAL TRACKING?</span>
+        </div>
+    </section>
+
+    <!-- Main Content Section -->
+    <section class="content-section">
+        <div class="content-container">
+            <h2 class="content-headline">Simple solution to make managing your finance rotation the easiest part of your day.</h2>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3>DealOrbit Rotation</h3>
+                    <p>Deals are automatically assigned to F&I managers in a fair, rotating sequence thanks to our proprietary DealOrbit Rotation Strategy. No manual tracking needed.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Real-Time Tracking</h3>
+                    <p>See exactly which manager is next, view the rotation queue, and track every deal in real-time.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📝</div>
+                    <h3>Complete Deal Log</h3>
+                    <p>Log every deal with customer details, vehicle information, and finance type. Full audit trail included.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚖️</div>
+                    <h3>Equitable Distribution</h3>
+                    <p>Ensure every F&I manager gets fair opportunities. Build trust and transparency in your team.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Solutions Section -->
+    <section id="solutions" class="info-section">
+        <div class="info-container">
+            <h2 class="section-title">Solutions</h2>
+            <div class="solutions-grid">
+                <div class="solution-card">
+                    <div class="solution-icon">🔄</div>
+                    <h3>Automated Deal Rotation</h3>
+                    <p>Eliminate manual tracking and human error with our intelligent rotation system. Deals are automatically assigned to F&I managers in a fair, sequential order, ensuring every team member gets equal opportunities.</p>
+                </div>
+                <div class="solution-card">
+                    <div class="solution-icon">⚖️</div>
+                    <h3>Fair Distribution</h3>
+                    <p>Build trust and transparency in your finance department. Our system ensures equitable deal distribution, preventing favoritism and ensuring all managers have equal access to opportunities.</p>
+                </div>
+                <div class="solution-card">
+                    <div class="solution-icon">📊</div>
+                    <h3>Complete Visibility</h3>
+                    <p>Track every deal in real-time with comprehensive reporting. See who's next in rotation, view deal history, and maintain complete accountability across your finance team.</p>
+                </div>
+                <div class="solution-card">
+                    <div class="solution-icon">🚀</div>
+                    <h3>Easy Integration</h3>
+                    <p>Get started in minutes with our simple setup process. No complex integrations required - just add your managers and start rotating deals immediately.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="info-section alt-section">
+        <div class="info-container">
+            <h2 class="section-title">Features</h2>
+            <div class="features-detail-grid">
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">🔄</div>
+                    <h3>DealOrbit Rotation</h3>
+                    <p>Deals are automatically assigned to F&I managers in a fair, rotating sequence thanks to our proprietary DealOrbit Rotation Strategy. No manual tracking needed.</p>
+                    <ul class="feature-list">
+                        <li>Sequential deal assignment</li>
+                        <li>Automatic queue management</li>
+                        <li>Daily reset functionality</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">📱</div>
+                    <h3>Real-Time SMS Alerts</h3>
+                    <p>Stay informed instantly with SMS notifications for rotation status updates. Get alerts when it's your turn, when deals are assigned, and important rotation changes.</p>
+                    <ul class="feature-list">
+                        <li>Next manager notifications</li>
+                        <li>Deal assignment alerts</li>
+                        <li>Rotation status updates</li>
+                        <li>Customizable alert preferences</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">📝</div>
+                    <h3>Complete Deal Logging</h3>
+                    <p>Log every deal with comprehensive details including customer information, vehicle details, finance type, payment tracking, and assigned manager. Maintain a complete audit trail.</p>
+                    <ul class="feature-list">
+                        <li>Customer information tracking</li>
+                        <li>Vehicle and stock number logging</li>
+                        <li>Finance type categorization</li>
+                        <li>Payment in/out tracking</li>
+                        <li>Full deal history with search</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">👥</div>
+                    <h3>Producer Management</h3>
+                    <p>Easily add, edit, and manage your finance producers. Control who's in rotation, track individual performance, and maintain contact information all in one place.</p>
+                    <ul class="feature-list">
+                        <li>Add/remove producers</li>
+                        <li>Edit producer details</li>
+                        <li>Rotation status control</li>
+                        <li>Contact information storage</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">📊</div>
+                    <h3>Payment Bump Reports</h3>
+                    <p>Track performance with comprehensive monthly reports showing deal counts, average payment bumps, and goal tracking for each finance producer.</p>
+                    <ul class="feature-list">
+                        <li>Monthly deal statistics</li>
+                        <li>Average payment bump calculation</li>
+                        <li>Customizable payment bump goals</li>
+                        <li>Goal achievement tracking</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">📈</div>
+                    <h3>Historical Data & Analytics</h3>
+                    <p>Access and analyze historical deal data with powerful search and export capabilities. Review past performance and export spreadsheets for reporting.</p>
+                    <ul class="feature-list">
+                        <li>Historical deal storage</li>
+                        <li>Search by date, manager, or customer</li>
+                        <li>CSV export functionality</li>
+                        <li>Date-based deal viewing</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">🔄</div>
+                    <h3>Real-Time Rotation Dashboard</h3>
+                    <p>Monitor your rotation system with a comprehensive dashboard. See who's next, view the queue, track daily deals, and get instant updates on rotation status.</p>
+                    <ul class="feature-list">
+                        <li>Live rotation queue</li>
+                        <li>Next manager display</li>
+                        <li>Daily deal tracking</li>
+                        <li>Visual status indicators</li>
+                    </ul>
+                </div>
+                <div class="feature-detail-card">
+                    <div class="feature-detail-icon">🔒</div>
+                    <h3>Secure & Reliable</h3>
+                    <p>Your data is stored locally in your browser with automatic backups. No cloud storage required - complete control and privacy for your dealership.</p>
+                    <ul class="feature-list">
+                        <li>Local data storage</li>
+                        <li>Automatic state saving</li>
+                        <li>Daily reset functionality</li>
+                        <li>Data export capabilities</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="info-section">
+        <div class="info-container">
+            <h2 class="section-title">About DealOrbit</h2>
+            <div class="about-content">
+                <div class="about-text">
+                    <p class="about-intro">
+                        DealOrbit is a comprehensive rotation management system designed specifically for automotive dealerships to ensure fair and equitable distribution of finance deals among F&I managers.
+                    </p>
+                    <h3>Our Mission</h3>
+                    <p>
+                        We believe in fairness, transparency, and efficiency. DealOrbit eliminates the guesswork and manual tracking that often leads to unfair deal distribution. Our system ensures every F&I manager gets equal opportunities, building trust and improving team morale.
+                    </p>
+                    <h3>Why DealOrbit?</h3>
+                    <p>
+                        Traditional methods of deal distribution often rely on memory, favoritism, or manual tracking - all of which can lead to errors and disputes. DealOrbit automates the entire process, ensuring fairness while saving time and reducing conflicts.
+                    </p>
+                    <h3>Key Benefits</h3>
+                    <ul class="benefits-list">
+                        <li><strong>Fairness:</strong> Every manager gets equal opportunities</li>
+                        <li><strong>Transparency:</strong> Complete visibility into the rotation system</li>
+                        <li><strong>Efficiency:</strong> Automated assignment eliminates manual work</li>
+                        <li><strong>Accountability:</strong> Track every deal with full audit trails</li>
+                        <li><strong>Simplicity:</strong> Easy to use, no training required</li>
+                    </ul>
+                </div>
+                <div class="about-stats">
+                    <div class="stat-card">
+                        <div class="stat-number">100%</div>
+                        <div class="stat-label">Fair Distribution</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">24/7</div>
+                        <div class="stat-label">Automatic Rotation</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">0</div>
+                        <div class="stat-label">Manual Errors</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    </div>
+    <!-- End Landing Page Content -->
+
+    <!-- Login Section -->
+    <section id="login" class="login-section">
+        <div class="login-container">
+            <div class="login-logo-wrapper">
+                <a href="#" id="loginPageLogoLink" style="cursor: pointer; display: inline-block;">
+                    <img src="logo.svg" alt="DealOrbit logo" loading="lazy">
+                </a>
+            </div>
+            <h2>Login</h2>
+            <form id="loginForm" class="login-form">
+                <label>
+                    Username
+                    <input type="text" id="loginUsername" required placeholder="Enter your username" autocomplete="username" />
+                </label>
+                <div id="passwordSection" style="display: none;">
+                    <div id="passwordSetupSection" style="display: none;">
+                        <p style="color: #6b7280; font-size: 13px; margin-bottom: 16px; padding: 12px; background: #e6f7fd; border-radius: 6px; border: 1px solid #72CFF4;">
+                            Welcome! Please create a password for your account.
+                        </p>
+                        <label>
+                            New Password *
+                            <input type="password" id="newPasswordSetup" required placeholder="Min 8 characters" minlength="8" autocomplete="new-password" />
+                            <small style="color: #6b7280; font-size: 11px; margin-top: 4px; display: block;">Minimum 8 characters required</small>
+                        </label>
+                        <label>
+                            Confirm Password *
+                            <input type="password" id="confirmPasswordSetup" required placeholder="Confirm password" minlength="8" autocomplete="new-password" />
+                        </label>
+                    </div>
+                    <div id="passwordLoginSection" style="display: none;">
+                        <label>
+                            Password *
+                            <input type="password" id="loginPassword" required placeholder="Enter your password" autocomplete="current-password" />
+                        </label>
+                    </div>
+                </div>
+                <button type="submit" class="primary-cta" id="loginSubmitBtn">Continue</button>
+                <p class="login-error" id="loginError" style="display: none; color: #dc2626; text-align: center; margin-top: 10px;"></p>
+                <p class="forgot-password-link" style="text-align: center; margin-top: 10px;">
+                    <a href="#" id="forgotPasswordLink" style="color: #72CFF4; text-decoration: none; font-weight: 500; font-size: 14px;">Forgot Password? <span style="font-size: 11px; color: #9ca3af;">(Beta Use Only)</span></a>
+                </p>
+                <p class="signup-login-link">Don't have an account? <a href="#signup">Sign Up</a></p>
+                <p class="view-landing-link" style="text-align: center; margin-top: 15px;">
+                    <a href="#" id="viewLandingLink" style="color: #72CFF4; text-decoration: none; font-weight: 500; font-size: 14px;">View Landing Page</a>
+                </p>
+            </form>
+        </div>
+    </section>
+
+    <!-- Forgot Password Section -->
+    <section id="forgotPassword" class="forgot-password-section">
+        <div class="forgot-password-container">
+            <h2>Reset Password</h2>
+            <form id="forgotPasswordForm" class="forgot-password-form">
+                <div id="forgotPasswordStep1">
+                    <p style="color: #4b5563; margin-bottom: 20px; text-align: center;">
+                        Enter your email address and we'll send you a verification code to reset your password.
+                    </p>
+                    <label>
+                        Email Address
+                        <input type="email" id="forgotPasswordEmail" required placeholder="your@email.com" />
+                    </label>
+                    <button type="submit" class="primary-cta">Send Reset Code</button>
+                    <p class="forgot-password-error" id="forgotPasswordError" style="display: none; color: #dc2626; text-align: center; margin-top: 10px;"></p>
+                    <p class="signup-login-link" style="margin-top: 20px;">
+                        <a href="#" id="backToLoginLink1">Back to Login</a>
+                    </p>
+                </div>
+                
+                <div id="forgotPasswordStep2" style="display: none;">
+                    <p style="color: #4b5563; margin-bottom: 20px; text-align: center;">
+                        Enter the verification code sent to your email and your new password.
+                    </p>
+                    <label>
+                        Verification Code
+                        <input type="text" id="resetCode" placeholder="000000" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" />
+                    </label>
+                    <label>
+                        New Password
+                        <input type="password" id="newPassword" required placeholder="Enter new password" minlength="8" />
+                    </label>
+                    <label>
+                        Confirm New Password
+                        <input type="password" id="confirmNewPassword" required placeholder="Confirm new password" minlength="8" />
+                    </label>
+                    <button type="submit" class="primary-cta">Reset Password</button>
+                    <button type="button" id="resendResetCodeBtn" class="secondary-btn" style="width: auto; margin-top: 10px;">Resend Code</button>
+                    <p class="forgot-password-error" id="resetPasswordError" style="display: none; color: #dc2626; text-align: center; margin-top: 10px;"></p>
+                    <p class="signup-login-link" style="margin-top: 20px;">
+                        <a href="#" id="backToLoginLink2">Back to Login</a>
+                    </p>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <!-- Sign Up Section -->
+    <section id="signup" class="signup-section">
+        <div class="signup-container">
+            <h2>Create Account</h2>
+            <form id="signupForm" class="signup-form">
+                <label>
+                    Full Name
+                    <input type="text" id="signupName" required placeholder="John Doe" />
+                </label>
+                <label>
+                    Email Address
+                    <input type="email" id="signupEmail" required placeholder="john@example.com" />
+                </label>
+                <label>
+                    Company/Dealership Name
+                    <input type="text" id="signupCompany" required placeholder="ABC Motors" />
+                </label>
+                <label>
+                    Phone Number
+                    <input type="tel" id="signupPhone" required placeholder="(555) 123-4567" />
+                </label>
+                <label>
+                    User Role
+                    <select id="signupRole" required>
+                        <option value="">Select Role</option>
+                        <option value="admin">Admin</option>
+                        <option value="desk">Desk Manager</option>
+                        <option value="finance">Finance Manager</option>
+                    </select>
+                </label>
+                <label>
+                    Password
+                    <input type="password" id="signupPassword" required placeholder="Create a password" minlength="8" />
+                </label>
+                <label>
+                    Confirm Password
+                    <input type="password" id="signupPasswordConfirm" required placeholder="Confirm password" />
+                </label>
+                <button type="submit" class="primary-cta">Create Account</button>
+                <p class="signup-error" id="signupError" style="display: none; color: #dc2626; text-align: center; margin-top: 10px;"></p>
+                <p class="signup-login-link">Already have an account? <a href="#login">Login</a></p>
+            </form>
+        </div>
+    </section>
+
+    <!-- Control Center Section (After Login) -->
+    <div class="control-center-wrapper" id="controlCenter">
+        <div class="control-center-header">
+            <div class="control-center-title">
+                <div class="logo-wrapper" aria-label="DealOrbit logo">
+                    <img src="logo.svg" alt="DealOrbit logo" loading="lazy">
+                </div>
+                <div class="header-actions">
+                    <div class="dealership-name" id="dealershipName" style="display: none;">
+                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                            <span style="color: #ffffff; font-weight: 600; font-size: 16px;">Dealership: <span id="dealershipNameValue" style="color: #72CFF4;">-</span></span>
+                            <span style="color: #ffffff; font-weight: 400; font-size: 13px; opacity: 0.9;">Username: <span id="usernameValue" style="color: #72CFF4;">-</span></span>
+                        </div>
+                    </div>
+                    <button class="settings-trigger" id="settingsTrigger" aria-label="Open settings" aria-expanded="false">
+                        <img src="settings-pinwheel.svg" alt="DealOrbit settings pinwheel" loading="lazy">
+                    </button>
+                    <button class="logout-btn" id="logoutBtn" aria-label="Log out">Log Out</button>
+                </div>
+            </div>
+        </div>
+        
+        <div class="container" id="appContainer">
+            <!-- AI Chatbot Toggle Button (Finance Manager Only) -->
+            <button id="chatbotToggleBtn" class="chatbot-toggle-btn" style="display: none;" aria-label="Open AI Assistant">
+                <span>💬</span>
+            </button>
+            
+            <!-- AI Chatbot (Finance Manager Only) -->
+            <div id="aiChatbot" class="ai-chatbot" style="display: none;">
+                <div class="chatbot-header">
+                    <h3>AI Assistant</h3>
+                    <button class="chatbot-close" id="chatbotCloseBtn" aria-label="Close chatbot">&times;</button>
+                </div>
+                <div class="chatbot-messages" id="chatbotMessages">
+                    <div class="chatbot-message bot-message">
+                        <p>Hello! I'm your AI assistant. How can I help you with DealOrbit today?</p>
+                    </div>
+                </div>
+                <div class="chatbot-input-container">
+                    <input type="text" id="chatbotInput" placeholder="Type your message..." />
+                    <button id="chatbotSendBtn" class="chatbot-send-btn">Send</button>
+                </div>
+            </div>
+            
+            <div class="main-content">
+            <!-- Main Tabs Navigation -->
+            <section class="tabs-section">
+                <div class="tabs-container">
+                    <button class="tab-btn active" data-tab="rotation">Rotation</button>
+                    <button class="tab-btn" data-tab="logdeal">Log Deal</button>
+                    <button class="tab-btn" data-tab="deals">Deals</button>
+                    <button class="tab-btn" data-tab="reports">Reports</button>
+                    <button class="tab-btn" data-tab="history">Deal History</button>
+                    <button class="tab-btn" data-tab="manage">Manage</button>
+                </div>
+            </section>
+
+            <!-- Manage Tab (Rotation Only - Finance Managers Only) -->
+            <section class="tab-content" id="manageTab">
+                <h2>Manage Rotation</h2>
+                <p style="color: #6b7280; margin-bottom: 24px;">All Finance Managers are listed below. Toggle them in or out of rotation. Only Finance Managers can be in rotation. To edit manager details or change roles, use the Settings panel.</p>
+                
+                <div style="margin-bottom: 20px;">
+                    <button id="clearAllRotationBtn" class="danger-btn" style="width: auto;">Clear All from Rotation</button>
+                </div>
+                
+                <div class="managers-list" id="managersList"></div>
+            </section>
+
+            <!-- Rotation Tab -->
+            <section class="tab-content active" id="rotationTab">
+                <h2>Current Rotation</h2>
+                <div class="rotation-info">
+                    <p><strong>Next Deal Assigned To:</strong> <span id="nextManagerDisplay">-</span></p>
+                </div>
+                <div class="rotation-queue" id="rotationQueue"></div>
+            </section>
+
+            <!-- Log Deal Tab -->
+            <section class="tab-content" id="logdealTab">
+                <h2>Log New Deal</h2>
+                <div class="deal-form">
+                    <div class="form-row">
+                        <label>
+                            Customer Last Name:
+                            <input type="text" id="customerLastName" />
+                        </label>
+                        <label>
+                            Salesperson:
+                            <input type="text" id="salesperson" />
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <label>
+                            Vehicle Sold:
+                            <input type="text" id="vehicleSold" />
+                        </label>
+                        <label>
+                            Stock #:
+                            <input type="text" id="stockNumber" />
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <label>
+                            Finance Type:
+                            <select id="financeType">
+                                <option value="">Select...</option>
+                                <option value="Cash">Cash</option>
+                                <option value="Finance">Finance</option>
+                                <option value="Lease">Lease</option>
+                            </select>
+                        </label>
+                        <label>
+                            F&I Manager:
+                            <select id="fiManager" disabled>
+                                <option value="">Auto-assigned</option>
+                            </select>
+                        </label>
+                    </div>
+                    <div class="form-row">
+                        <label>
+                            Payment In ($):
+                            <input type="number" id="paymentIn" step="0.01" min="0" placeholder="0.00" />
+                        </label>
+                        <label>
+                            Payment Out ($):
+                            <input type="number" id="paymentOut" step="0.01" min="0" placeholder="0.00" />
+                        </label>
+                    </div>
+                    <button id="logDealBtn" class="primary-btn">Log Deal</button>
+                </div>
+            </section>
+
+            <!-- Deals Table Tab -->
+            <section class="tab-content" id="dealsTab">
+                <div class="table-header">
+                    <h2>Deals</h2>
+                    <div class="table-actions">
+                        <input type="text" id="searchDealsInput" placeholder="Search deals..." class="search-input" />
+                        <button id="trashDealLogBtn" class="danger-btn">Trash Deal Log</button>
+                    </div>
+                </div>
+                <div class="table-container">
+                    <table id="dealsTable">
+                        <thead>
+                            <tr>
+                                <th></th>
+                                <th>F&I</th>
+                                <th>Time</th>
+                                <th>Customer Last Name</th>
+                                <th>Salesperson</th>
+                                <th>Vehicle Sold</th>
+                                <th>Stock #</th>
+                                <th>Deal #</th>
+                                <th>Finance Type</th>
+                                <th>Payment In</th>
+                                <th>Payment Out</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dealsTableBody">
+                            <!-- Deal rows will be appended here -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Reports Tab -->
+            <section class="tab-content" id="reportsTab">
+                <h2>Payment Bump Reports</h2>
+                <div class="reports-container">
+                    <div class="reports-filters">
+                        <label>
+                            Select Month:
+                            <select id="reportMonth">
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                        </label>
+                        <label>
+                            Select Year:
+                            <select id="reportYear">
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                        </label>
+                    </div>
+                    <div id="reportsContent" class="reports-content">
+                        <!-- Reports will be generated here -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Deal History Tab -->
+            <section class="tab-content" id="historyTab">
+                <h2>Historical Deal Spreadsheets</h2>
+                <div class="history-container">
+                    <div class="history-search">
+                        <input type="text" id="searchHistoryInput" placeholder="Search by date, manager, customer..." class="search-input" />
+                        <button id="exportHistoryBtn" class="primary-btn">Export Selected</button>
+                    </div>
+                    <div id="historyList" class="history-list">
+                        <!-- Historical spreadsheets will be listed here -->
+                    </div>
+                </div>
+            </section>
+
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
