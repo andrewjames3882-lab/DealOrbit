@@ -30,6 +30,7 @@ let isApplyingRemoteUpdate = false; // Prevent loops when applying remote update
 let usePolling = false;
 
 // Helper: perform authenticated API fetch against the backend
+// Uses window.DEALORBIT_API_BASE_URL if set (for production when frontend and backend are on different hosts); otherwise same origin.
 async function apiFetch(path, options = {}) {
     const opts = { ...options };
     opts.headers = opts.headers || {};
@@ -39,7 +40,9 @@ async function apiFetch(path, options = {}) {
     if (opts.body && !opts.headers['Content-Type']) {
         opts.headers['Content-Type'] = 'application/json';
     }
-    const baseUrl = window.location.origin || '';
+    const baseUrl = (typeof window.DEALORBIT_API_BASE_URL !== 'undefined' && window.DEALORBIT_API_BASE_URL !== '')
+        ? String(window.DEALORBIT_API_BASE_URL).replace(/\/$/, '')
+        : (window.location.origin || '');
     return fetch(baseUrl + path, opts);
 }
 
