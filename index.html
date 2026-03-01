@@ -398,6 +398,10 @@
             <h2>Login</h2>
             <form id="loginForm" class="login-form">
                 <label>
+                    Dealership / Company
+                    <input type="text" id="loginCompany" required placeholder="Your dealership name" autocomplete="organization" />
+                </label>
+                <label>
                     Username
                     <input type="text" id="loginUsername" required placeholder="Enter your username" autocomplete="username" />
                 </label>
@@ -497,6 +501,10 @@
                     <input type="email" id="signupEmail" required placeholder="john@example.com" />
                 </label>
                 <label>
+                    Username
+                    <input type="text" id="signupUsername" required placeholder="johndoe" pattern="[a-zA-Z0-9_]+" title="Username can only contain letters, numbers, and underscores" />
+                </label>
+                <label>
                     Company/Dealership Name
                     <input type="text" id="signupCompany" required placeholder="ABC Motors" />
                 </label>
@@ -580,6 +588,7 @@
                     <button class="tab-btn active" data-tab="rotation">Rotation</button>
                     <button class="tab-btn" data-tab="logdeal">Log Deal</button>
                     <button class="tab-btn" data-tab="deals">Deals</button>
+                    <button class="tab-btn" data-tab="cit">Manage CIT</button>
                     <button class="tab-btn" data-tab="reports">Reports</button>
                     <button class="tab-btn" data-tab="history">Deal History</button>
                     <button class="tab-btn" data-tab="manage">Manage</button>
@@ -623,42 +632,131 @@
                     </div>
                     <div class="form-row">
                         <label>
-                            Vehicle Sold:
-                            <input type="text" id="vehicleSold" />
-                        </label>
-                        <label>
-                            Stock #:
-                            <input type="text" id="stockNumber" />
-                        </label>
-                    </div>
-                    <div class="form-row">
-                        <label>
-                            Finance Type:
-                            <select id="financeType">
-                                <option value="">Select...</option>
-                                <option value="Cash">Cash</option>
-                                <option value="Finance">Finance</option>
-                                <option value="Lease">Lease</option>
+                            Number of Vehicles:
+                            <select id="numberOfVehicles">
+                                <option value="1">1 Vehicle</option>
+                                <option value="2">2 Vehicles (Same Family)</option>
+                                <option value="3">3 Vehicles (Same Family)</option>
                             </select>
-                        </label>
-                        <label>
-                            F&I Manager:
-                            <select id="fiManager" disabled>
-                                <option value="">Auto-assigned</option>
-                            </select>
+                            <small style="color: #6b7280; font-size: 12px; margin-top: 4px; display: block;">Same F&I Manager for all vehicles</small>
                         </label>
                     </div>
-                    <div class="form-row">
-                        <label>
-                            Payment In ($):
-                            <input type="number" id="paymentIn" step="0.01" min="0" placeholder="0.00" />
-                        </label>
-                        <label>
-                            Payment Out ($):
-                            <input type="number" id="paymentOut" step="0.01" min="0" placeholder="0.00" />
-                        </label>
+                    
+                    <!-- Vehicle 1 Section -->
+                    <div id="vehicle1Section" class="vehicle-section">
+                        <h3 style="color: #72CFF4; margin: 20px 0 10px 0; font-size: 18px;">Vehicle 1</h3>
+                        <div class="form-row">
+                            <label>
+                                Vehicle Sold:
+                                <input type="text" id="vehicleSold" />
+                            </label>
+                            <label>
+                                Stock #:
+                                <input type="text" id="stockNumber" />
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Finance Type:
+                                <select id="financeType">
+                                    <option value="">Select...</option>
+                                    <option value="Cash">Cash</option>
+                                    <option value="Finance">Finance</option>
+                                    <option value="Lease">Lease</option>
+                                </select>
+                            </label>
+                            <label>
+                                F&I Manager:
+                                <select id="fiManager" disabled>
+                                    <option value="">Auto-assigned</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Payment In ($):
+                                <input type="number" id="paymentIn" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                            <label>
+                                Payment Out ($):
+                                <input type="number" id="paymentOut" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                        </div>
                     </div>
-                    <button id="logDealBtn" class="primary-btn">Log Deal</button>
+                    
+                    <!-- Vehicle 2 Section (hidden by default) -->
+                    <div id="vehicle2Section" class="vehicle-section" style="display: none;">
+                        <h3 style="color: #72CFF4; margin: 20px 0 10px 0; font-size: 18px;">Vehicle 2</h3>
+                        <div class="form-row">
+                            <label>
+                                Vehicle Sold:
+                                <input type="text" id="vehicleSold2" />
+                            </label>
+                            <label>
+                                Stock #:
+                                <input type="text" id="stockNumber2" />
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Finance Type:
+                                <select id="financeType2">
+                                    <option value="">Select...</option>
+                                    <option value="Cash">Cash</option>
+                                    <option value="Finance">Finance</option>
+                                    <option value="Lease">Lease</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Payment In ($):
+                                <input type="number" id="paymentIn2" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                            <label>
+                                Payment Out ($):
+                                <input type="number" id="paymentOut2" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Vehicle 3 Section (hidden by default) -->
+                    <div id="vehicle3Section" class="vehicle-section" style="display: none;">
+                        <h3 style="color: #72CFF4; margin: 20px 0 10px 0; font-size: 18px;">Vehicle 3</h3>
+                        <div class="form-row">
+                            <label>
+                                Vehicle Sold:
+                                <input type="text" id="vehicleSold3" />
+                            </label>
+                            <label>
+                                Stock #:
+                                <input type="text" id="stockNumber3" />
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Finance Type:
+                                <select id="financeType3">
+                                    <option value="">Select...</option>
+                                    <option value="Cash">Cash</option>
+                                    <option value="Finance">Finance</option>
+                                    <option value="Lease">Lease</option>
+                                </select>
+                            </label>
+                        </div>
+                        <div class="form-row">
+                            <label>
+                                Payment In ($):
+                                <input type="number" id="paymentIn3" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                            <label>
+                                Payment Out ($):
+                                <input type="number" id="paymentOut3" step="0.01" min="0" placeholder="0.00" />
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button id="logDealBtn" class="primary-btn">Log Deal(s)</button>
                 </div>
             </section>
 
@@ -693,6 +791,63 @@
                             <!-- Deal rows will be appended here -->
                         </tbody>
                     </table>
+                </div>
+            </section>
+
+            <!-- Manage CIT Tab (Contracts In Transit) -->
+            <section class="tab-content" id="citTab">
+                <h2>Manage CIT (Contracts In Transit)</h2>
+                <div class="cit-container">
+                    <!-- CIT Summary Dashboard -->
+                    <div class="cit-dashboard" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                        <div class="stat-card" style="background: #f0f9ff; padding: 20px; border-radius: 12px; border: 2px solid #72CFF4;">
+                            <div style="font-size: 32px; font-weight: 700; color: #72CFF4;" id="totalCITDeals">0</div>
+                            <div style="color: #6b7280; font-size: 14px; margin-top: 4px;">Total CIT Deals</div>
+                        </div>
+                        <div class="stat-card" style="background: #fef3c7; padding: 20px; border-radius: 12px; border: 2px solid #fbbf24;">
+                            <div style="font-size: 32px; font-weight: 700; color: #f59e0b;" id="avgDaysToFunding">0</div>
+                            <div style="color: #6b7280; font-size: 14px; margin-top: 4px;">Avg Days to Funding</div>
+                        </div>
+                        <div class="stat-card" style="background: #dcfce7; padding: 20px; border-radius: 12px; border: 2px solid #10b981;">
+                            <div style="font-size: 32px; font-weight: 700; color: #10b981;" id="fundedDeals">0</div>
+                            <div style="color: #6b7280; font-size: 14px; margin-top: 4px;">Funded This Month</div>
+                        </div>
+                    </div>
+                    
+                    <!-- CIT Filters -->
+                    <div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">
+                        <select id="citStageFilter" class="search-input" style="width: 200px;">
+                            <option value="">All Stages</option>
+                            <option value="Submitted to Lender">Submitted to Lender</option>
+                            <option value="Pending Documentation">Pending Documentation</option>
+                            <option value="Approved - Awaiting Funding">Approved - Awaiting Funding</option>
+                            <option value="Funded">Funded</option>
+                            <option value="Cancelled">Cancelled</option>
+                            <option value="On Hold">On Hold</option>
+                        </select>
+                        <input type="text" id="citSearchInput" placeholder="Search deals..." class="search-input" style="flex: 1; min-width: 250px;" />
+                    </div>
+                    
+                    <!-- CIT Table -->
+                    <div class="table-container">
+                        <table id="citTable" style="width: 100%; border-collapse: collapse;">
+                            <thead>
+                                <tr style="background: #f8f9fa; border-bottom: 2px solid #e5e7eb;">
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Deal #</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Customer</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">F&I Manager</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Vehicle</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Date Logged</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Days Pending</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Stage</th>
+                                    <th style="padding: 12px; text-align: left; font-weight: 600;">Comments</th>
+                                </tr>
+                            </thead>
+                            <tbody id="citTableBody">
+                                <!-- CIT rows will be appended here -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </section>
 
@@ -734,6 +889,129 @@
                 </div>
             </section>
 
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Deal Modal -->
+    <div id="editDealModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit Deal</h2>
+                <button class="modal-close" id="editDealCloseBtn" aria-label="Close edit modal">&times;</button>
+            </div>
+            <form id="editDealForm" class="deal-form">
+                <input type="hidden" id="editDealId" value="">
+                <div class="form-row">
+                    <label>
+                        Customer Last Name:
+                        <input type="text" id="editCustomerLastName" required />
+                    </label>
+                    <label>
+                        Salesperson:
+                        <input type="text" id="editSalesperson" required />
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        Vehicle Sold:
+                        <input type="text" id="editVehicleSold" required />
+                    </label>
+                    <label>
+                        Stock #:
+                        <input type="text" id="editStockNumber" required />
+                    </label>
+                </div>
+                <div class="form-row">
+                    <label>
+                        Finance Type:
+                        <select id="editFinanceType" required>
+                            <option value="">Select...</option>
+                            <option value="Cash">Cash</option>
+                            <option value="Finance">Finance</option>
+                            <option value="Lease">Lease</option>
+                        </select>
+                    </label>
+                    <label>
+                        Payment In ($):
+                        <input type="number" id="editPaymentIn" step="0.01" min="0" placeholder="0.00" />
+                    </label>
+                </div>
+                <div class="form-row" id="editPaymentOutRow">
+                    <label>
+                        Payment Out ($):
+                        <input type="number" id="editPaymentOut" step="0.01" min="0" placeholder="0.00" />
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="primary-btn">Save Changes</button>
+                    <button type="button" class="secondary-btn" id="editDealCancelBtn">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Unlog Deal Modal -->
+    <div id="unlogDealModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Unlog Deal</h2>
+                <button class="modal-close" id="unlogDealCloseBtn" aria-label="Close unlog modal">&times;</button>
+            </div>
+            <form id="unlogDealForm">
+                <input type="hidden" id="unlogDealId" value="">
+                <div style="margin-bottom: 20px;">
+                    <p style="color: #6b7280; margin-bottom: 16px;">
+                        Please select a reason for unlogging this deal. This action will mark the deal as unlogged while preserving all data for record keeping.
+                    </p>
+                    <label>
+                        Reason for Unlogging *
+                        <select id="unlogReason" required>
+                            <option value="">Select reason...</option>
+                            <option value="Desk Decision">Desk Decision</option>
+                            <option value="Customer Decision">Customer Decision</option>
+                            <option value="Incorrect rotation">Incorrect Rotation</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </label>
+                </div>
+                <div id="unlogNoteSection" style="display: none; margin-bottom: 20px;">
+                    <label>
+                        Detailed Notes *
+                        <textarea id="unlogNotes" rows="4" placeholder="Please provide detailed explanation..." required></textarea>
+                        <small style="color: #6b7280; font-size: 12px; margin-top: 4px; display: block;">Required when selecting "Other" or for additional context</small>
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="danger-btn">Unlog Deal</button>
+                    <button type="button" class="secondary-btn" id="unlogDealCancelBtn">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- CIT Comments Modal -->
+    <div id="citCommentsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Deal Comments</h2>
+                <button class="modal-close" id="citCommentsCloseBtn" aria-label="Close comments modal">&times;</button>
+            </div>
+            <div style="padding: 24px;">
+                <input type="hidden" id="citCommentsDealId" value="">
+                <div id="citCommentsDisplay" style="max-height: 300px; overflow-y: auto; margin-bottom: 20px; padding: 16px; background: #f8f9fa; border-radius: 8px;">
+                    <!-- Comments will be displayed here -->
+                </div>
+                <form id="citAddCommentForm">
+                    <label>
+                        Add New Comment
+                        <textarea id="citNewComment" rows="3" placeholder="Enter your comment..." required></textarea>
+                    </label>
+                    <div class="form-actions" style="margin-top: 16px;">
+                        <button type="submit" class="primary-btn">Add Comment</button>
+                        <button type="button" class="secondary-btn" id="citCommentsCancelBtn">Close</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>

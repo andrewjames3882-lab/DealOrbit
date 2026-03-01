@@ -60,6 +60,8 @@ A dynamic round-robin queue system for equitably distributing finance deals amon
 
 ## State Persistence
 
+### Local (single-device) mode
+
 All data is automatically saved to localStorage:
 - `dealOrbit_managers`: Manager information and rotation status
 - `dealOrbit_dealHistory`: Complete deal history
@@ -67,12 +69,41 @@ All data is automatically saved to localStorage:
 - `dealOrbit_dailyDeals`: Daily deal counts per manager
 - `dealOrbit_lastAssigned`: Last assigned manager (prevents back-to-back)
 
+### Hosted multi-tenant mode (per rooftop)
+
+When you run the Node server (`ws-server.js`) and access DealOrbit via `http://localhost:8000` (or a hosted URL):
+
+- Each dealership (rooftop) signs up with:
+  - Dealership/Company name
+  - Admin user (name, email, username, password, role)
+- The server stores state for **each rooftop separately** in a small JSON database (`db.json`):
+  - Rotation state (managers, deals, daily counts, etc.)
+  - User accounts for that rooftop
+  - Plan information (Standard/Professional/Enterprise)
+- Users from one rooftop **cannot see** another rooftop’s data; every API call is scoped to the authenticated user’s rooftop.
+
+State is persisted on the server, so teams at the same rooftop can log in from different browsers/devices and share the same data.
+
 ## Technical Details
 
 - **Table Structure**: Columns include F&I, Time, Customer Last Name, Salesperson, Vehicle Sold, Stock #, Deal #, Finance Type
 - **Deal Numbering**: Sequential, starting from 1
 - **Time Zone**: All daily resets and date calculations use PDT (Pacific Daylight Time)
 - **Browser Compatibility**: Modern browsers with localStorage support
+- **Server Option**: Optional Node server (`ws-server.js`) adds:
+  - Multi-tenant JSON API (`/api/auth/*`, `/api/state`)
+  - Per-rooftop login and data isolation
+  - Polling-based sync between browsers for the same rooftop
+
+To start the server locally:
+
+```bash
+cd /Volumes/DrewSanDisk/DealOrbit
+npm install   # installs ws dependency
+npm start     # runs ws-server.js on port 8000
+```
+
+Then open `http://localhost:8000` in your browser and use the **Sign Up** / **Login** flows. Each dealership that signs up gets its own isolated dataset.
 
 ## Example Workflow
 

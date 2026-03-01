@@ -18,6 +18,159 @@ let purchasePlan = { // Purchase plan configuration
     maxUsers: 10,
     currentUsers: 0
 };
+let db = null; // IndexedDB database for document storage
+
+// Auth token for backend API (set after login/signup)
+let authToken = null;
+
+// Polling-based sync (no WebSocket multi-tenant sharing)
+let pollingInterval = null; // Polling for state sync
+let lastStateHash = null; // Track state hash to detect changes
+let isApplyingRemoteUpdate = false; // Prevent loops when applying remote updates
+let usePolling = false;
+
+// Helper: perform authenticated API fetch against the backend
+async function apiFetch(path, options = {}) {
+    const opts = { ...options };
+    opts.headers = opts.headers || {};
+    if (authToken) {
+        opts.headers['Authorization'] = `Bearer ${authToken}`;
+    }
+    if (opts.body && !opts.headers['Content-Type']) {
+        opts.headers['Content-Type'] = 'application/json';
+    }
+    const baseUrl = window.location.origin || '';
+    return fetch(baseUrl + path, opts);
+}
+
+// Send current state to backend API for this tenant
+function sendStateToServer() {
+    if (!authToken || isApplyingRemoteUpdate) {
+        return;
+    }
+    
+    const state = {
+        managers: managers,
+        dealHistory: dealHistory,
+        rotationOrder: rotationOrder,
+        dailyDeals: dailyDeals,
+        lastAssignedManager: lastAssignedManager,
+        historicalSpreadsheets: historicalSpreadsheets,
+        paymentBumpGoals: paymentBumpGoals,
+        users: users,
+        removedDeals: removedDeals,
+        purchasePlan: purchasePlan
+    };
+    
+    apiFetch('/api/state', {
+        method: 'POST',
+        body: JSON.stringify({ state })
+    }).catch(err => {
+        console.warn('Failed to sync state via API:', err);
+    });
+}
+
+// Start polling-based state sync (per-tenant)
+function startPollingSync() {
+    if (!authToken) return;
+    if (pollingInterval) return; // Already polling
+    
+    console.log('🔄 Starting polling-based state sync (API mode)');
+    usePolling = true;
+    
+    // Poll every 2 seconds for state updates
+    pollingInterval = setInterval(() => {
+        apiFetch('/api/state')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('State GET failed with status ' + response.status);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data && data.state) {
+                    const stateHash = JSON.stringify(data.state);
+                    if (stateHash !== lastStateHash) {
+                        console.log('📥 Polling: State change detected from server');
+                        lastStateHash = stateHash;
+                        applyRemoteState(data.state);
+                    }
+                }
+            })
+            .catch(err => {
+                // Silently fail - server might not be available or auth missing
+                console.warn('Polling state failed:', err.message || err);
+            });
+    }, 2000); // Poll every 2 seconds
+}
+
+// Apply remote state update from backend
+function applyRemoteState(remoteState) {
+    if (!remoteState) return;
+    
+    isApplyingRemoteUpdate = true;
+    
+    try {
+        // Update all state variables
+        if (remoteState.managers) managers = remoteState.managers;
+        if (remoteState.dealHistory) {
+            dealHistory = remoteState.dealHistory;
+            // Rebuild dealRows map
+            dealRows.clear();
+            dealHistory.forEach(deal => {
+                dealRows.set(deal.dealId, deal);
+            });
+        }
+        if (remoteState.rotationOrder) rotationOrder = remoteState.rotationOrder;
+        if (remoteState.dailyDeals) dailyDeals = remoteState.dailyDeals;
+        if (remoteState.lastAssignedManager !== undefined) lastAssignedManager = remoteState.lastAssignedManager;
+        if (remoteState.historicalSpreadsheets) historicalSpreadsheets = remoteState.historicalSpreadsheets;
+        if (remoteState.paymentBumpGoals) paymentBumpGoals = remoteState.paymentBumpGoals;
+        if (remoteState.users) users = remoteState.users;
+        if (remoteState.removedDeals) removedDeals = remoteState.removedDeals;
+        if (remoteState.purchasePlan) purchasePlan = remoteState.purchasePlan;
+        
+        // Save to localStorage (client-side cache only)
+        saveStateToLocalStorage();
+        
+        // Update UI
+        updateManagersList();
+        updateRotationQueue();
+        updateNextManagerDisplay();
+        updateDealsTable();
+        updateProducerList();
+        updateReports();
+        updateHistoryList();
+        
+        console.log('✅ Applied remote state update - UI refreshed');
+    } catch (error) {
+        console.error('Error applying remote state:', error);
+    } finally {
+        // Use setTimeout to ensure state updates complete before resetting flag
+        setTimeout(() => {
+            isApplyingRemoteUpdate = false;
+        }, 100);
+    }
+}
+
+// Save state to localStorage (separated from WebSocket sync)
+function saveStateToLocalStorage() {
+    localStorage.setItem('dealOrbit_managers', JSON.stringify(managers));
+    localStorage.setItem('dealOrbit_dealHistory', JSON.stringify(dealHistory));
+    localStorage.setItem('dealOrbit_rotationOrder', JSON.stringify(rotationOrder));
+    localStorage.setItem('dealOrbit_dailyDeals', JSON.stringify(dailyDeals));
+    localStorage.setItem('dealOrbit_historicalSpreadsheets', JSON.stringify(historicalSpreadsheets));
+    localStorage.setItem('dealOrbit_paymentBumpGoals', JSON.stringify(paymentBumpGoals));
+    localStorage.setItem('dealOrbit_users', JSON.stringify(users));
+    localStorage.setItem('dealOrbit_removedDeals', JSON.stringify(removedDeals));
+    localStorage.setItem('dealOrbit_purchasePlan', JSON.stringify(purchasePlan));
+    if (lastAssignedManager) {
+        localStorage.setItem('dealOrbit_lastAssigned', lastAssignedManager);
+    }
+    if (currentUser) {
+        localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
+    }
+}
 
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
@@ -34,10 +187,8 @@ document.addEventListener('DOMContentLoaded', () => {
 function setupTabCloseLogout() {
     // Clear user session when tab/window is closed
     window.addEventListener('beforeunload', () => {
-        if (currentUser) {
-            // Clear current user from localStorage
-            localStorage.removeItem('dealOrbit_currentUser');
-        }
+        // Keep auth token and user in localStorage so session can resume.
+        // Backend session will still enforce expiration.
     });
     
     // Also handle visibility change (tab switching)
@@ -81,8 +232,38 @@ function loadState() {
     if (savedRemovedDeals) removedDeals = JSON.parse(savedRemovedDeals);
     if (savedPurchasePlan) purchasePlan = JSON.parse(savedPurchasePlan);
     
+    // Load auth token if present (for hosted multi-tenant mode)
+    const savedAuthToken = localStorage.getItem('dealOrbit_authToken');
+    if (savedAuthToken) {
+        authToken = savedAuthToken;
+    }
+    
     // Update current user count
     purchasePlan.currentUsers = users.length;
+    
+    // Create default admin user if no users exist
+    if (users.length === 0) {
+        console.log('No users found, creating default admin user...');
+        const defaultAdmin = {
+            id: 'user-admin-default',
+            name: 'Admin User',
+            email: 'admin@dealorbit.com',
+            username: 'admin',
+            company: 'DealOrbit',
+            phone: '',
+            role: 'admin',
+            passwordHash: hashPassword('admin123'), // Default password
+            needsPasswordSetup: false,
+            createdAt: new Date().toISOString()
+        };
+        users.push(defaultAdmin);
+        purchasePlan.currentUsers = users.length;
+        saveState();
+        console.log('Default admin user created:');
+        console.log('  Username: admin');
+        console.log('  Password: admin123');
+        console.log('  ⚠️  Please change the password after first login!');
+    }
 
     // Initialize dailyDeals for today if needed
     const today = getTodayKey();
@@ -96,23 +277,11 @@ function loadState() {
     });
 }
 
-// Save state to localStorage
+// Save state to localStorage and sync via WebSocket
 function saveState() {
-    localStorage.setItem('dealOrbit_managers', JSON.stringify(managers));
-    localStorage.setItem('dealOrbit_dealHistory', JSON.stringify(dealHistory));
-    localStorage.setItem('dealOrbit_rotationOrder', JSON.stringify(rotationOrder));
-    localStorage.setItem('dealOrbit_dailyDeals', JSON.stringify(dailyDeals));
-    localStorage.setItem('dealOrbit_historicalSpreadsheets', JSON.stringify(historicalSpreadsheets));
-    localStorage.setItem('dealOrbit_paymentBumpGoals', JSON.stringify(paymentBumpGoals));
-    localStorage.setItem('dealOrbit_users', JSON.stringify(users));
-    localStorage.setItem('dealOrbit_removedDeals', JSON.stringify(removedDeals));
-    localStorage.setItem('dealOrbit_purchasePlan', JSON.stringify(purchasePlan));
-    if (lastAssignedManager) {
-        localStorage.setItem('dealOrbit_lastAssigned', lastAssignedManager);
-    }
-    if (currentUser) {
-        localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
-    }
+    saveStateToLocalStorage();
+    // Also send to backend API for real-time sync across this rooftop
+    sendStateToServer();
 }
 
 // Get today's date key (YYYY-MM-DD)
@@ -286,6 +455,114 @@ function setupEventListeners() {
             toggleSettingsPanel(false);
         }
     });
+    
+    // Edit Deal Modal event listeners
+    const editDealForm = document.getElementById('editDealForm');
+    if (editDealForm) {
+        editDealForm.addEventListener('submit', saveEditedDeal);
+    }
+    
+    const editDealCloseBtn = document.getElementById('editDealCloseBtn');
+    if (editDealCloseBtn) {
+        editDealCloseBtn.addEventListener('click', closeEditDealModal);
+    }
+    
+    const editDealCancelBtn = document.getElementById('editDealCancelBtn');
+    if (editDealCancelBtn) {
+        editDealCancelBtn.addEventListener('click', closeEditDealModal);
+    }
+    
+    // Unlog Deal Modal event listeners
+    const unlogDealForm = document.getElementById('unlogDealForm');
+    if (unlogDealForm) {
+        unlogDealForm.addEventListener('submit', unlogDeal);
+    }
+    
+    const unlogDealCloseBtn = document.getElementById('unlogDealCloseBtn');
+    if (unlogDealCloseBtn) {
+        unlogDealCloseBtn.addEventListener('click', closeUnlogDealModal);
+    }
+    
+    const unlogDealCancelBtn = document.getElementById('unlogDealCancelBtn');
+    if (unlogDealCancelBtn) {
+        unlogDealCancelBtn.addEventListener('click', closeUnlogDealModal);
+    }
+    
+    const unlogReason = document.getElementById('unlogReason');
+    if (unlogReason) {
+        unlogReason.addEventListener('change', handleUnlogReasonChange);
+    }
+    
+    // Number of vehicles dropdown
+    const numberOfVehicles = document.getElementById('numberOfVehicles');
+    if (numberOfVehicles) {
+        numberOfVehicles.addEventListener('change', handleNumberOfVehiclesChange);
+    }
+    
+    // CIT Comments Modal event listeners
+    const citAddCommentForm = document.getElementById('citAddCommentForm');
+    if (citAddCommentForm) {
+        citAddCommentForm.addEventListener('submit', addCITComment);
+    }
+    
+    const citCommentsCloseBtn = document.getElementById('citCommentsCloseBtn');
+    if (citCommentsCloseBtn) {
+        citCommentsCloseBtn.addEventListener('click', closeCITComments);
+    }
+    
+    const citCommentsCancelBtn = document.getElementById('citCommentsCancelBtn');
+    if (citCommentsCancelBtn) {
+        citCommentsCancelBtn.addEventListener('click', closeCITComments);
+    }
+    
+    // CIT Filters
+    const citStageFilter = document.getElementById('citStageFilter');
+    if (citStageFilter) {
+        citStageFilter.addEventListener('change', updateCITTable);
+    }
+    
+    const citSearchInput = document.getElementById('citSearchInput');
+    if (citSearchInput) {
+        citSearchInput.addEventListener('input', updateCITTable);
+    }
+    
+    // Close modals when clicking outside
+    const editDealModal = document.getElementById('editDealModal');
+    if (editDealModal) {
+        editDealModal.addEventListener('click', (e) => {
+            if (e.target === editDealModal) {
+                closeEditDealModal();
+            }
+        });
+    }
+    
+    const unlogDealModal = document.getElementById('unlogDealModal');
+    if (unlogDealModal) {
+        unlogDealModal.addEventListener('click', (e) => {
+            if (e.target === unlogDealModal) {
+                closeUnlogDealModal();
+            }
+        });
+    }
+}
+
+// Handle number of vehicles change
+function handleNumberOfVehiclesChange() {
+    const numberOfVehicles = parseInt(document.getElementById('numberOfVehicles').value);
+    const vehicle2Section = document.getElementById('vehicle2Section');
+    const vehicle3Section = document.getElementById('vehicle3Section');
+    
+    if (numberOfVehicles >= 2) {
+        vehicle2Section.style.display = 'block';
+    } else {
+        vehicle2Section.style.display = 'none';
+    }
+    
+    if (numberOfVehicles >= 3) {
+        vehicle3Section.style.display = 'block';
+    } else {
+        vehicle3Section.style.display = 'none';
+    }
 }
 
 // Add a new manager to rotation
@@ -533,68 +810,107 @@ function getNextManager() {
     return sortedQueue[0];
 }
 
-// Log a new deal
+// Log a new deal (or multiple deals for multi-vehicle)
 function logDeal() {
     const customerLastName = document.getElementById('customerLastName').value.trim();
     const salesperson = document.getElementById('salesperson').value.trim();
-    const vehicleSold = document.getElementById('vehicleSold').value.trim();
-    const stockNumber = document.getElementById('stockNumber').value.trim();
-    const financeType = document.getElementById('financeType').value;
-    const paymentIn = parseFloat(document.getElementById('paymentIn').value) || 0;
-    const paymentOut = parseFloat(document.getElementById('paymentOut').value) || 0;
-
-    if (!customerLastName || !salesperson || !vehicleSold || !stockNumber || !financeType) {
-        alert('Please fill in all required fields');
+    const numberOfVehicles = parseInt(document.getElementById('numberOfVehicles').value) || 1;
+    
+    if (!customerLastName || !salesperson) {
+        alert('Please fill in customer last name and salesperson');
         return;
     }
+    
+    // Collect vehicle data for each vehicle
+    const vehicles = [];
+    for (let i = 1; i <= numberOfVehicles; i++) {
+        const suffix = i === 1 ? '' : i.toString();
+        const vehicleSold = document.getElementById('vehicleSold' + suffix).value.trim();
+        const stockNumber = document.getElementById('stockNumber' + suffix).value.trim();
+        const financeType = document.getElementById('financeType' + suffix).value;
+        const paymentIn = parseFloat(document.getElementById('paymentIn' + suffix).value) || 0;
+        const paymentOut = parseFloat(document.getElementById('paymentOut' + suffix).value) || 0;
+        
+        if (!vehicleSold || !stockNumber || !financeType) {
+            alert(`Please fill in all required fields for Vehicle ${i}`);
+            return;
+        }
+        
+        vehicles.push({
+            vehicleSold,
+            stockNumber,
+            financeType,
+            paymentIn,
+            paymentOut
+        });
+    }
 
-    // Get next manager from rotation
+    // Get next manager from rotation (same manager for all vehicles in batch)
     const assignedManager = getNextManager();
     if (!assignedManager) {
         alert('No managers in rotation. Please add a manager first.');
         return;
     }
-
-    // Create deal object
+    
+    // Generate a batch ID for multi-vehicle deals
+    const batchId = numberOfVehicles > 1 ? `batch-${Date.now()}` : null;
+    
     const now = new Date();
-    const dealId = `deal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const dealNumber = dealHistory.length + 1;
-
-    const deal = {
-        dealId,
-        dealNumber,
-        fiManager: assignedManager,
-        time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-        customerLastName,
-        salesperson,
-        vehicleSold,
-        stockNumber,
-        financeType,
-        paymentIn,
-        paymentOut,
-        paymentBump: paymentIn - paymentOut, // Calculate payment bump
-        date: getTodayKey(),
-        timestamp: now.getTime(),
-        loggedBy: currentUser ? currentUser.name : 'System'
-    };
-
-    // Add to deal history
-    dealHistory.push(deal);
-    dealRows.set(dealId, deal);
-
-    // Update daily deals count
     const today = getTodayKey();
+    const deals = [];
+    
+    // Create deal objects for each vehicle
+    vehicles.forEach((vehicle, index) => {
+        const dealId = `deal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const dealNumber = dealHistory.length + 1;
+        
+        // Check for duplicate deal number (defensive check)
+        if (isDuplicateDealNumber(dealNumber)) {
+            alert(`Deal number ${dealNumber} already exists. Please try again.`);
+            return;
+        }
+        
+        const deal = {
+            dealId,
+            dealNumber,
+            fiManager: assignedManager,
+            time: now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            customerLastName,
+            salesperson,
+            vehicleSold: vehicle.vehicleSold,
+            stockNumber: vehicle.stockNumber,
+            financeType: vehicle.financeType,
+            paymentIn: vehicle.paymentIn,
+            paymentOut: vehicle.paymentOut,
+            paymentBump: vehicle.paymentIn - vehicle.paymentOut,
+            date: today,
+            timestamp: now.getTime() + index, // Small increment to maintain order
+            loggedBy: currentUser ? currentUser.name : 'System',
+            batchId: batchId,
+            batchPosition: numberOfVehicles > 1 ? index + 1 : null,
+            batchTotal: numberOfVehicles > 1 ? numberOfVehicles : null
+        };
+        
+        deals.push(deal);
+        
+        // Add to deal history
+        dealHistory.push(deal);
+        dealRows.set(dealId, deal);
+    });
+    
+    // Update daily deals count (count all vehicles)
     if (!dailyDeals[today][assignedManager]) {
         dailyDeals[today][assignedManager] = 0;
     }
-    dailyDeals[today][assignedManager]++;
+    dailyDeals[today][assignedManager] += numberOfVehicles;
 
     // Update last assigned manager
     lastAssignedManager = assignedManager;
 
     // Show notification if logged by desk manager or admin
     if (currentUser && (currentUser.role === 'desk' || currentUser.role === 'admin')) {
-        showDealNotification(assignedManager);
+        const vehicleText = numberOfVehicles > 1 ? `${numberOfVehicles} vehicles` : 'deal';
+        showDealNotification(`${assignedManager} - ${vehicleText}`);
     }
     
     // Send SMS notification to Finance Managers about rotation position
@@ -603,17 +919,49 @@ function logDeal() {
     // Clear form
     document.getElementById('customerLastName').value = '';
     document.getElementById('salesperson').value = '';
-    document.getElementById('vehicleSold').value = '';
-    document.getElementById('stockNumber').value = '';
-    document.getElementById('financeType').value = '';
-    document.getElementById('paymentIn').value = '';
-    document.getElementById('paymentOut').value = '';
+    document.getElementById('numberOfVehicles').value = '1';
+    
+    // Clear all vehicle sections
+    for (let i = 1; i <= 3; i++) {
+        const suffix = i === 1 ? '' : i.toString();
+        document.getElementById('vehicleSold' + suffix).value = '';
+        document.getElementById('stockNumber' + suffix).value = '';
+        document.getElementById('financeType' + suffix).value = '';
+        document.getElementById('paymentIn' + suffix).value = '';
+        document.getElementById('paymentOut' + suffix).value = '';
+    }
+    
+    // Hide vehicle 2 and 3 sections
+    document.getElementById('vehicle2Section').style.display = 'none';
+    document.getElementById('vehicle3Section').style.display = 'none';
 
-    // Update UI
-    appendDealRow(deal);
+    // Update UI - add all deals
+    deals.forEach(deal => appendDealRow(deal));
     updateRotationQueue();
     updateNextManagerDisplay();
     saveState();
+    
+    const message = numberOfVehicles > 1 
+        ? `Successfully logged ${numberOfVehicles} vehicles for ${customerLastName} - assigned to ${assignedManager}`
+        : `Deal logged successfully and assigned to ${assignedManager}`;
+    alert(message);
+}
+
+// Check if deal number already exists
+function isDuplicateDealNumber(dealNumber, excludeDealId = null) {
+    return dealHistory.some(deal => {
+        // Don't check against the deal being edited (if excludeDealId is provided)
+        if (excludeDealId && deal.dealId === excludeDealId) return false;
+        // Don't check against unlogged deals
+        if (deal.isUnlogged) return false;
+        return deal.dealNumber === dealNumber;
+    });
+}
+
+// Check if user can view payment out (Admin and Finance Managers only)
+function canViewPaymentOut() {
+    if (!currentUser) return false;
+    return currentUser.role === 'admin' || currentUser.role === 'finance';
 }
 
 // Check if payment out can be edited for a deal
@@ -636,6 +984,12 @@ function canEditPaymentOut(deal) {
     return false;
 }
 
+// Check if user can view payment out (Admin and Finance Managers only)
+function canViewPaymentOut() {
+    if (!currentUser) return false;
+    return currentUser.role === 'admin' || currentUser.role === 'finance';
+}
+
 // Append a new deal row to the table (static - doesn't move existing rows)
 function appendDealRow(deal) {
     const tbody = document.getElementById('dealsTableBody');
@@ -648,35 +1002,63 @@ function appendDealRow(deal) {
     // Check if payment out can be edited
     const canEdit = canEditPaymentOut(deal);
     
-    // Create payment out cell - editable if allowed
+    // Create payment out cell - editable if allowed, hidden if user can't view
     let paymentOutCell;
-    if (canEdit) {
-        paymentOutCell = `
-            <td class="editable-payment-out">
-                <input type="number" 
-                       class="payment-out-input" 
-                       value="${paymentOutValue.toFixed(2)}" 
-                       step="0.01" 
-                       min="0" 
-                       data-deal-id="${deal.dealId}"
-                       onchange="updatePaymentOut('${deal.dealId}', this.value)"
-                       style="width: 100px; padding: 4px; border: 1px solid #72CFF4; border-radius: 4px; text-align: right;"
-                       title="Editable until end of day">
-            </td>
-        `;
+    if (canViewPaymentOut()) {
+        if (canEdit) {
+            paymentOutCell = `
+                <td class="editable-payment-out">
+                    <input type="number" 
+                           class="payment-out-input" 
+                           value="${paymentOutValue.toFixed(2)}" 
+                           step="0.01" 
+                           min="0" 
+                           data-deal-id="${deal.dealId}"
+                           onchange="updatePaymentOut('${deal.dealId}', this.value)"
+                           style="width: 100px; padding: 4px; border: 1px solid #72CFF4; border-radius: 4px; text-align: right;"
+                           title="Editable until end of day">
+                </td>
+            `;
+        } else {
+            paymentOutCell = `<td>${paymentOutValue > 0 ? `$${paymentOutValue.toFixed(2)}` : '-'}</td>`;
+        }
     } else {
-        paymentOutCell = `<td>${paymentOutValue > 0 ? `$${paymentOutValue.toFixed(2)}` : '-'}</td>`;
+        // Hide Payment Out column for desk managers
+        paymentOutCell = `<td style="display: none;"></td>`;
     }
     
     // Check if user can remove deals (desk or admin)
     const canRemove = currentUser && (currentUser.role === 'desk' || currentUser.role === 'admin');
-    const removeButton = canRemove 
-        ? `<button class="remove-deal-btn" onclick="removeDeal('${deal.dealId}')" title="Remove deal">Remove</button>`
-        : '-';
+    
+    // Create action buttons - Edit and Unlog
+    let actionButtons = '';
+    if (!deal.isUnlogged) {
+        actionButtons += `<button class="edit-deal-btn" onclick="openEditDealModal('${deal.dealId}')" title="Edit deal">Edit</button>`;
+        actionButtons += `<button class="unlog-deal-btn" onclick="openUnlogDealModal('${deal.dealId}')" title="Unlog deal">Unlog</button>`;
+    }
+    
+    // Add unlogged badge if deal is unlogged
+    const unloggedBadge = deal.isUnlogged ? `<span class="unlogged-badge">UNLOGGED</span>` : '';
+    
+    // Add batch badge for multi-vehicle deals
+    const batchBadge = deal.batchId && deal.batchPosition && deal.batchTotal
+        ? `<span class="batch-badge" style="background: #10b981; color: #ffffff; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; margin-left: 8px;">${deal.batchPosition} of ${deal.batchTotal}</span>`
+        : '';
+    
+    // Apply unlogged styling to row
+    if (deal.isUnlogged) {
+        row.classList.add('unlogged-deal');
+    }
+    
+    // Apply batch styling to row (light green background)
+    if (deal.batchId) {
+        row.style.backgroundColor = '#f0fdf4';
+        row.style.borderLeft = '4px solid #10b981';
+    }
 
     row.innerHTML = `
         <td></td>
-        <td>${deal.fiManager}</td>
+        <td>${deal.fiManager}${unloggedBadge}${batchBadge}</td>
         <td>${deal.time}</td>
         <td>${deal.customerLastName}</td>
         <td>${deal.salesperson}</td>
@@ -686,7 +1068,7 @@ function appendDealRow(deal) {
         <td>${deal.financeType}</td>
         <td>${paymentIn}</td>
         ${paymentOutCell}
-        <td>${removeButton}</td>
+        <td>${actionButtons || '-'}</td>
     `;
 
     tbody.appendChild(row);
@@ -816,6 +1198,405 @@ function removeDeal(dealId) {
     
     alert('Deal removed successfully. The removal has been recorded for audit purposes.');
 }
+
+// Open Edit Deal Modal
+function openEditDealModal(dealId) {
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) {
+        alert('Deal not found.');
+        return;
+    }
+    
+    // Populate form with current deal data
+    document.getElementById('editDealId').value = dealId;
+    document.getElementById('editCustomerLastName').value = deal.customerLastName;
+    document.getElementById('editSalesperson').value = deal.salesperson;
+    document.getElementById('editVehicleSold').value = deal.vehicleSold;
+    document.getElementById('editStockNumber').value = deal.stockNumber;
+    document.getElementById('editFinanceType').value = deal.financeType;
+    document.getElementById('editPaymentIn').value = deal.paymentIn || '';
+    document.getElementById('editPaymentOut').value = deal.paymentOut || '';
+    
+    // Hide Payment Out field for desk managers
+    const paymentOutRow = document.getElementById('editPaymentOutRow');
+    if (paymentOutRow) {
+        paymentOutRow.style.display = canViewPaymentOut() ? 'flex' : 'none';
+    }
+    
+    // Show modal
+    document.getElementById('editDealModal').style.display = 'flex';
+}
+
+// Close Edit Deal Modal
+function closeEditDealModal() {
+    document.getElementById('editDealModal').style.display = 'none';
+    document.getElementById('editDealForm').reset();
+}
+
+// Save edited deal
+function saveEditedDeal(event) {
+    event.preventDefault();
+    
+    const dealId = document.getElementById('editDealId').value;
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    
+    if (!deal) {
+        alert('Deal not found.');
+        return;
+    }
+    
+    // Update deal properties
+    deal.customerLastName = document.getElementById('editCustomerLastName').value.trim();
+    deal.salesperson = document.getElementById('editSalesperson').value.trim();
+    deal.vehicleSold = document.getElementById('editVehicleSold').value.trim();
+    deal.stockNumber = document.getElementById('editStockNumber').value.trim();
+    deal.financeType = document.getElementById('editFinanceType').value;
+    deal.paymentIn = parseFloat(document.getElementById('editPaymentIn').value) || 0;
+    
+    if (canViewPaymentOut()) {
+        deal.paymentOut = parseFloat(document.getElementById('editPaymentOut').value) || 0;
+        deal.paymentBump = deal.paymentIn - deal.paymentOut;
+    }
+    
+    // Track edit history
+    if (!deal.editHistory) {
+        deal.editHistory = [];
+    }
+    deal.editHistory.push({
+        editedAt: new Date().toISOString(),
+        editedBy: currentUser ? currentUser.name : 'Unknown'
+    });
+    
+    // Update UI
+    refreshDealsTable();
+    saveState();
+    closeEditDealModal();
+    
+    alert('Deal updated successfully.');
+}
+
+// Open Unlog Deal Modal
+function openUnlogDealModal(dealId) {
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) {
+        alert('Deal not found.');
+        return;
+    }
+    
+    document.getElementById('unlogDealId').value = dealId;
+    document.getElementById('unlogDealModal').style.display = 'flex';
+}
+
+// Close Unlog Deal Modal
+function closeUnlogDealModal() {
+    document.getElementById('unlogDealModal').style.display = 'none';
+    document.getElementById('unlogDealForm').reset();
+    document.getElementById('unlogNoteSection').style.display = 'none';
+}
+
+// Handle unlog reason change
+function handleUnlogReasonChange() {
+    const reason = document.getElementById('unlogReason').value;
+    const noteSection = document.getElementById('unlogNoteSection');
+    const notesField = document.getElementById('unlogNotes');
+    
+    if (reason === 'Other') {
+        noteSection.style.display = 'block';
+        notesField.required = true;
+    } else {
+        noteSection.style.display = 'none';
+        notesField.required = false;
+    }
+}
+
+// Unlog deal
+function unlogDeal(event) {
+    event.preventDefault();
+    
+    const dealId = document.getElementById('unlogDealId').value;
+    const reason = document.getElementById('unlogReason').value;
+    const notes = document.getElementById('unlogNotes').value.trim();
+    
+    if (!reason) {
+        alert('Please select a reason for unlogging.');
+        return;
+    }
+    
+    if (reason === 'Other' && !notes) {
+        alert('Please provide detailed notes when selecting "Other".');
+        return;
+    }
+    
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) {
+        alert('Deal not found.');
+        return;
+    }
+    
+    // Check if any deals were logged AFTER this deal
+    const subsequentDeals = dealHistory.filter(d => 
+        !d.isUnlogged && 
+        d.timestamp > deal.timestamp
+    );
+    
+    // Mark deal as unlogged
+    deal.isUnlogged = true;
+    deal.unloggedAt = new Date().toISOString();
+    deal.unloggedBy = currentUser ? currentUser.name : 'Unknown';
+    deal.unlogReason = reason;
+    deal.unlogNotes = notes;
+    
+    // Rotation logic: Skip Finance Manager's next turn if subsequent deals exist
+    if (subsequentDeals.length > 0 && deal.fiManager) {
+        // Remove the manager from current rotation position
+        const managerIndex = rotationOrder.indexOf(deal.fiManager);
+        if (managerIndex !== -1) {
+            rotationOrder.splice(managerIndex, 1);
+            // Add them back at the end of the queue
+            rotationOrder.push(deal.fiManager);
+            console.log(`${deal.fiManager} skipped in rotation due to unlogged deal with subsequent activity.`);
+        }
+    }
+    
+    // Update UI
+    refreshDealsTable();
+    updateRotationQueue();
+    updateNextManagerDisplay();
+    saveState();
+    closeUnlogDealModal();
+    
+    const message = subsequentDeals.length > 0
+        ? `Deal unlogged. ${deal.fiManager} will be moved to the end of the rotation queue.`
+        : `Deal unlogged. ${deal.fiManager} maintains their current rotation position.`;
+    
+    alert(message);
+}
+
+// Refresh entire deals table
+function refreshDealsTable() {
+    const tbody = document.getElementById('dealsTableBody');
+    tbody.innerHTML = '';
+    dealHistory.forEach(deal => appendDealRow(deal));
+}
+
+// Make functions globally accessible
+window.openEditDealModal = openEditDealModal;
+window.openUnlogDealModal = openUnlogDealModal;
+
+// ===== CIT (CONTRACTS IN TRANSIT) FUNCTIONALITY =====
+
+// Initialize CIT data for deals (add default stage if not present)
+function initializeCITData() {
+    dealHistory.forEach(deal => {
+        if (!deal.citStage) {
+            deal.citStage = 'Submitted to Lender';
+        }
+        if (!deal.citComments) {
+            deal.citComments = [];
+        }
+        if (!deal.dateSubmitted && !deal.isUnlogged) {
+            deal.dateSubmitted = deal.date;
+        }
+    });
+}
+
+// Calculate days since deal was logged
+function calculateDaysPending(deal) {
+    if (deal.citStage === 'Funded' && deal.dateFunded) {
+        const submitted = new Date(deal.dateSubmitted || deal.date);
+        const funded = new Date(deal.dateFunded);
+        const diffTime = funded - submitted;
+        return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    }
+    
+    const submitted = new Date(deal.dateSubmitted || deal.date);
+    const today = new Date();
+    const diffTime = today - submitted;
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+// Update CIT table
+function updateCITTable() {
+    const tbody = document.getElementById('citTableBody');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
+    
+    // Initialize CIT data
+    initializeCITData();
+    
+    // Filter deals (exclude unlogged)
+    const activeDeals = dealHistory.filter(d => !d.isUnlogged);
+    
+    // Apply stage filter
+    const stageFilter = document.getElementById('citStageFilter')?.value || '';
+    const searchTerm = document.getElementById('citSearchInput')?.value.toLowerCase() || '';
+    
+    const filteredDeals = activeDeals.filter(deal => {
+        const matchesStage = !stageFilter || deal.citStage === stageFilter;
+        const matchesSearch = !searchTerm || 
+            deal.customerLastName.toLowerCase().includes(searchTerm) ||
+            deal.fiManager.toLowerCase().includes(searchTerm) ||
+            deal.vehicleSold.toLowerCase().includes(searchTerm) ||
+            deal.dealNumber.toString().includes(searchTerm);
+        return matchesStage && matchesSearch;
+    });
+    
+    filteredDeals.forEach(deal => {
+        const row = document.createElement('tr');
+        row.style.borderBottom = '1px solid #e5e7eb';
+        
+        const daysPending = calculateDaysPending(deal);
+        let daysColor = '#10b981'; // Green
+        if (daysPending > 14) daysColor = '#ef4444'; // Red
+        else if (daysPending > 7) daysColor = '#f59e0b'; // Yellow
+        
+        const commentCount = (deal.citComments || []).length;
+        
+        row.innerHTML = `
+            <td style="padding: 12px;">${deal.dealNumber}</td>
+            <td style="padding: 12px;">${deal.customerLastName}</td>
+            <td style="padding: 12px;">${deal.fiManager}</td>
+            <td style="padding: 12px;">${deal.vehicleSold}</td>
+            <td style="padding: 12px;">${deal.date}</td>
+            <td style="padding: 12px; color: ${daysColor}; font-weight: 600;">${daysPending} days</td>
+            <td style="padding: 12px;">
+                <select onchange="updateCITStage('${deal.dealId}', this.value)" style="padding: 6px 12px; border-radius: 6px; border: 2px solid #e5e7eb;">
+                    <option value="Submitted to Lender" ${deal.citStage === 'Submitted to Lender' ? 'selected' : ''}>Submitted to Lender</option>
+                    <option value="Pending Documentation" ${deal.citStage === 'Pending Documentation' ? 'selected' : ''}>Pending Documentation</option>
+                    <option value="Approved - Awaiting Funding" ${deal.citStage === 'Approved - Awaiting Funding' ? 'selected' : ''}>Approved - Awaiting Funding</option>
+                    <option value="Funded" ${deal.citStage === 'Funded' ? 'selected' : ''}>Funded</option>
+                    <option value="Cancelled" ${deal.citStage === 'Cancelled' ? 'selected' : ''}>Cancelled</option>
+                    <option value="On Hold" ${deal.citStage === 'On Hold' ? 'selected' : ''}>On Hold</option>
+                </select>
+            </td>
+            <td style="padding: 12px;">
+                <button onclick="openCITComments('${deal.dealId}')" class="primary-btn" style="padding: 6px 14px; font-size: 13px;">
+                    💬 Comments (${commentCount})
+                </button>
+            </td>
+        `;
+        
+        tbody.appendChild(row);
+    });
+    
+    // Update dashboard stats
+    updateCITDashboard();
+}
+
+// Update CIT dashboard statistics
+function updateCITDashboard() {
+    const activeDeals = dealHistory.filter(d => !d.isUnlogged);
+    const totalCIT = activeDeals.filter(d => d.citStage !== 'Funded' && d.citStage !== 'Cancelled').length;
+    
+    const fundedThisMonth = activeDeals.filter(d => {
+        if (d.citStage === 'Funded' && d.dateFunded) {
+            const fundedDate = new Date(d.dateFunded);
+            const now = new Date();
+            return fundedDate.getMonth() === now.getMonth() && fundedDate.getFullYear() === now.getFullYear();
+        }
+        return false;
+    }).length;
+    
+    const pendingDeals = activeDeals.filter(d => d.citStage !== 'Funded' && d.citStage !== 'Cancelled');
+    const totalDays = pendingDeals.reduce((sum, d) => sum + calculateDaysPending(d), 0);
+    const avgDays = pendingDeals.length > 0 ? Math.round(totalDays / pendingDeals.length) : 0;
+    
+    document.getElementById('totalCITDeals').textContent = totalCIT;
+    document.getElementById('avgDaysToFunding').textContent = avgDays;
+    document.getElementById('fundedDeals').textContent = fundedThisMonth;
+}
+
+// Update deal CIT stage
+function updateCITStage(dealId, newStage) {
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) return;
+    
+    const oldStage = deal.citStage;
+    deal.citStage = newStage;
+    
+    // Track stage history
+    if (!deal.stageHistory) {
+        deal.stageHistory = [];
+    }
+    deal.stageHistory.push({
+        from: oldStage,
+        to: newStage,
+        changedAt: new Date().toISOString(),
+        changedBy: currentUser ? currentUser.name : 'Unknown'
+    });
+    
+    // If funded, record date
+    if (newStage === 'Funded' && !deal.dateFunded) {
+        deal.dateFunded = new Date().toISOString().split('T')[0];
+    }
+    
+    saveState();
+    updateCITTable();
+}
+
+// Open CIT comments modal
+function openCITComments(dealId) {
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) return;
+    
+    document.getElementById('citCommentsDealId').value = dealId;
+    
+    // Display existing comments
+    const commentsDisplay = document.getElementById('citCommentsDisplay');
+    if (!deal.citComments || deal.citComments.length === 0) {
+        commentsDisplay.innerHTML = '<p style="color: #6b7280; text-align: center;">No comments yet.</p>';
+    } else {
+        commentsDisplay.innerHTML = deal.citComments.map(comment => `
+            <div style="margin-bottom: 16px; padding: 12px; background: #ffffff; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <strong style="color: #333334;">${comment.addedBy}</strong>
+                    <small style="color: #6b7280;">${new Date(comment.addedAt).toLocaleString()}</small>
+                </div>
+                <p style="color: #4b5563; margin: 0;">${comment.text}</p>
+            </div>
+        `).join('');
+    }
+    
+    document.getElementById('citCommentsModal').style.display = 'flex';
+}
+
+// Close CIT comments modal
+function closeCITComments() {
+    document.getElementById('citCommentsModal').style.display = 'none';
+    document.getElementById('citAddCommentForm').reset();
+}
+
+// Add CIT comment
+function addCITComment(event) {
+    event.preventDefault();
+    
+    const dealId = document.getElementById('citCommentsDealId').value;
+    const commentText = document.getElementById('citNewComment').value.trim();
+    
+    if (!commentText) return;
+    
+    const deal = dealHistory.find(d => d.dealId === dealId);
+    if (!deal) return;
+    
+    if (!deal.citComments) {
+        deal.citComments = [];
+    }
+    
+    deal.citComments.push({
+        text: commentText,
+        addedBy: currentUser ? currentUser.name : 'Unknown',
+        addedAt: new Date().toISOString()
+    });
+    
+    saveState();
+    openCITComments(dealId); // Refresh comments display
+    document.getElementById('citNewComment').value = '';
+}
+
+// Make functions globally accessible
+window.updateCITStage = updateCITStage;
+window.openCITComments = openCITComments;
 
 // Filter deals table by search term
 function filterDealsTable(searchTerm) {
@@ -1211,6 +1992,8 @@ function setupTabs() {
                 updateNextManagerDisplay();
             } else if (targetTab === 'manage') {
                 updateManagersList();
+            } else if (targetTab === 'cit') {
+                updateCITTable();
             }
         });
     });
@@ -1435,8 +2218,15 @@ function exportHistoryDate(date) {
     const startY = 20;
     let yPos = startY;
     const lineHeight = 7;
-    const colWidths = [25, 18, 30, 25, 30, 20, 15, 20, 20, 20];
-    const headers = ['F&I', 'Time', 'Customer', 'Salesperson', 'Vehicle', 'Stock #', 'Deal #', 'Type', 'Pay In', 'Pay Out'];
+    
+    // Conditionally include Payment Out based on user role
+    const includePaymentOut = canViewPaymentOut();
+    const colWidths = includePaymentOut 
+        ? [25, 18, 30, 25, 30, 20, 15, 20, 20, 20]
+        : [28, 20, 35, 28, 35, 22, 18, 22, 22];
+    const headers = includePaymentOut
+        ? ['F&I', 'Time', 'Customer', 'Salesperson', 'Vehicle', 'Stock #', 'Deal #', 'Type', 'Pay In', 'Pay Out']
+        : ['F&I', 'Time', 'Customer', 'Salesperson', 'Vehicle', 'Stock #', 'Deal #', 'Type', 'Pay In'];
     
     // Title
     doc.setFontSize(16);
@@ -1489,18 +2279,30 @@ function exportHistoryDate(date) {
             doc.setFont(undefined, 'normal');
         }
         
-        const rowData = [
-            deal.fiManager || '-',
-            deal.time || '-',
-            deal.customerLastName || '-',
-            deal.salesperson || '-',
-            deal.vehicleSold || '-',
-            deal.stockNumber || '-',
-            deal.dealNumber || '-',
-            deal.financeType || '-',
-            deal.paymentIn ? `$${deal.paymentIn.toFixed(2)}` : '-',
-            deal.paymentOut ? `$${deal.paymentOut.toFixed(2)}` : '-'
-        ];
+        const rowData = includePaymentOut
+            ? [
+                deal.fiManager || '-',
+                deal.time || '-',
+                deal.customerLastName || '-',
+                deal.salesperson || '-',
+                deal.vehicleSold || '-',
+                deal.stockNumber || '-',
+                deal.dealNumber || '-',
+                deal.financeType || '-',
+                deal.paymentIn ? `$${deal.paymentIn.toFixed(2)}` : '-',
+                deal.paymentOut ? `$${deal.paymentOut.toFixed(2)}` : '-'
+            ]
+            : [
+                deal.fiManager || '-',
+                deal.time || '-',
+                deal.customerLastName || '-',
+                deal.salesperson || '-',
+                deal.vehicleSold || '-',
+                deal.stockNumber || '-',
+                deal.dealNumber || '-',
+                deal.financeType || '-',
+                deal.paymentIn ? `$${deal.paymentIn.toFixed(2)}` : '-'
+            ];
         
         xPos = margin;
         rowData.forEach((data, idx) => {
@@ -1530,14 +2332,16 @@ function exportHistoryDate(date) {
     
     doc.setFont(undefined, 'normal');
     const totalPaymentIn = deals.reduce((sum, d) => sum + (d.paymentIn || 0), 0);
-    const totalPaymentOut = deals.reduce((sum, d) => sum + (d.paymentOut || 0), 0);
-    const totalBump = totalPaymentIn - totalPaymentOut;
-    
     doc.text(`Total Payment In: $${totalPaymentIn.toFixed(2)}`, margin, yPos);
     yPos += lineHeight;
-    doc.text(`Total Payment Out: $${totalPaymentOut.toFixed(2)}`, margin, yPos);
-    yPos += lineHeight;
-    doc.text(`Total Payment Bump: $${totalBump.toFixed(2)}`, margin, yPos);
+    
+    if (includePaymentOut) {
+        const totalPaymentOut = deals.reduce((sum, d) => sum + (d.paymentOut || 0), 0);
+        const totalBump = totalPaymentIn - totalPaymentOut;
+        doc.text(`Total Payment Out: $${totalPaymentOut.toFixed(2)}`, margin, yPos);
+        yPos += lineHeight;
+        doc.text(`Total Payment Bump: $${totalBump.toFixed(2)}`, margin, yPos);
+    }
     
     // Save PDF
     doc.save(`dealorbit-${date}.pdf`);
@@ -1559,39 +2363,53 @@ function viewHistoryDate(date) {
 }
 
 // ===== AUTHENTICATION SYSTEM =====
-function checkAuth() {
-    // Check if there's a saved user session
-    const savedCurrentUser = localStorage.getItem('dealOrbit_currentUser');
-    
-    if (savedCurrentUser && currentUser) {
-        // User is logged in, show control center and hide landing page
-        showControlCenter();
-        updateDealershipName();
-    } else {
-        // No user session - for returning users, show login page (hide landing page)
-        // For new visitors, landing page will be visible by default
-        // Check if user has visited before (has any saved data)
-        const hasExistingData = localStorage.getItem('dealOrbit_users') || 
-                                localStorage.getItem('dealOrbit_managers');
-        
-        if (hasExistingData) {
-            // Returning user - show login, hide landing page
-            currentUser = null;
-            localStorage.removeItem('dealOrbit_currentUser');
-            showLogin();
-        } else {
-            // New visitor - show landing page (default state)
-            // Landing page is visible by default, just ensure login/signup are hidden
-            const loginSection = document.getElementById('login');
-            const signupSection = document.getElementById('signup');
-            const forgotPasswordSection = document.getElementById('forgotPassword');
-            const controlCenter = document.querySelector('.control-center-wrapper');
-            
-            if (loginSection) loginSection.style.display = 'none';
-            if (signupSection) signupSection.style.display = 'none';
-            if (forgotPasswordSection) forgotPasswordSection.style.display = 'none';
-            if (controlCenter) controlCenter.style.display = 'none';
+async function checkAuth() {
+    // If we have an auth token, ask the backend who we are
+    if (authToken) {
+        try {
+            const response = await apiFetch('/api/auth/me');
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.user) {
+                    currentUser = data.user;
+                    localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
+                    
+                    // Load server state for this rooftop and show control center
+                    await loadStateFromServer();
+                    showControlCenter();
+                    updateDealershipName();
+                    // Start polling for shared updates across this rooftop
+                    startPollingSync();
+                    return;
+                }
+            }
+        } catch (err) {
+            console.warn('Auth check failed, falling back to logged-out state:', err);
         }
+    }
+    
+    // Not authenticated - show landing (login/signup available)
+    currentUser = null;
+    localStorage.removeItem('dealOrbit_currentUser');
+    showLandingPage();
+}
+
+// Load full state from backend for the current authenticated rooftop
+async function loadStateFromServer() {
+    if (!authToken) return;
+    try {
+        const response = await apiFetch('/api/state');
+        if (!response.ok) {
+            throw new Error('State load failed with status ' + response.status);
+        }
+        const data = await response.json();
+        if (data && data.state) {
+            const stateHash = JSON.stringify(data.state);
+            lastStateHash = stateHash;
+            applyRemoteState(data.state);
+        }
+    } catch (err) {
+        console.error('Failed to load state from server:', err);
     }
 }
 
@@ -1777,6 +2595,64 @@ window.checkUser = function(username) {
     return user;
 };
 
+// Helper function to create a new user (for admin use)
+window.createUser = function(username, password, name, email, company, role = 'finance') {
+    // Check if username exists
+    if (users.find(u => u.username && u.username.toLowerCase() === username.toLowerCase())) {
+        console.error('Username already exists:', username);
+        return false;
+    }
+    
+    // Check if email exists
+    if (users.find(u => u.email && u.email.toLowerCase() === email.toLowerCase())) {
+        console.error('Email already exists:', email);
+        return false;
+    }
+    
+    const newUser = {
+        id: 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
+        name: name || username,
+        email: email || `${username}@dealorbit.com`,
+        username: username,
+        company: company || 'DealOrbit',
+        phone: '',
+        role: role,
+        passwordHash: password ? hashPassword(password) : null,
+        needsPasswordSetup: !password,
+        createdAt: new Date().toISOString()
+    };
+    
+    users.push(newUser);
+    purchasePlan.currentUsers = users.length;
+    saveState();
+    
+    console.log('✅ User created successfully:');
+    console.log('  Username:', username);
+    console.log('  Name:', newUser.name);
+    console.log('  Email:', newUser.email);
+    console.log('  Role:', role);
+    if (password) {
+        console.log('  Password: Set');
+    } else {
+        console.log('  Password: Will be set on first login');
+    }
+    
+    return true;
+};
+
+// Helper to list all users
+window.listUsers = function() {
+    console.log('All users in system:');
+    if (users.length === 0) {
+        console.log('  No users found');
+    } else {
+        users.forEach((user, index) => {
+            console.log(`${index + 1}. ${user.username} (${user.name}) - ${user.email} - Role: ${user.role}`);
+        });
+    }
+    return users;
+};
+
 // Generate a 6-digit verification code
 function generate2FACode() {
     return Math.floor(100000 + Math.random() * 900000).toString();
@@ -1867,6 +2743,7 @@ function setupLogin() {
     const passwordSection = document.getElementById('passwordSection');
     const passwordSetupSection = document.getElementById('passwordSetupSection');
     const passwordLoginSection = document.getElementById('passwordLoginSection');
+    const loginCompanyInput = document.getElementById('loginCompany');
     const loginUsernameInput = document.getElementById('loginUsername');
     const loginPasswordInput = document.getElementById('loginPassword');
     const newPasswordSetupInput = document.getElementById('newPasswordSetup');
@@ -1876,14 +2753,15 @@ function setupLogin() {
     let currentLoginUser = null; // Store user being logged in
     let usernameVerified = false; // Track if username has been verified
     
-    // Function to verify username and show password section
+    // Function to verify username (and company) against backend and show password section
     function verifyUsername() {
+        const company = loginCompanyInput ? loginCompanyInput.value.trim() : '';
         const username = loginUsernameInput ? loginUsernameInput.value.trim() : '';
         const errorMsg = document.getElementById('loginError');
         
-        if (!username) {
+        if (!company || !username) {
             if (errorMsg) {
-                errorMsg.textContent = 'Please enter your username';
+                errorMsg.textContent = 'Please enter your dealership and username';
                 errorMsg.style.display = 'block';
             }
             if (passwordSection) passwordSection.style.display = 'none';
@@ -1892,89 +2770,88 @@ function setupLogin() {
             return false;
         }
         
-        // Find user by username
-        console.log('Looking for username:', username);
-        console.log('Available users:', users.map(u => ({ username: u.username, name: u.name, email: u.email })));
-        const user = users.find(u => u.username && u.username.toLowerCase() === username.toLowerCase());
+        console.log('Verifying username with backend:', { company, username });
         
-        if (!user) {
-            console.error('Username not found:', username);
+        apiFetch('/api/auth/lookup', {
+            method: 'POST',
+            body: JSON.stringify({ company, username })
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Lookup failed');
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (!data.exists) {
+                console.error('Username not found for company:', { company, username });
+                if (errorMsg) {
+                    errorMsg.textContent = 'User not found for this dealership';
+                    errorMsg.style.display = 'block';
+                }
+                if (passwordSection) passwordSection.style.display = 'none';
+                usernameVerified = false;
+                currentLoginUser = null;
+                return false;
+            }
+            
+            // Username + company found - show password section
+            usernameVerified = true;
+            currentLoginUser = {
+                company,
+                username,
+                needsPasswordSetup: !!data.needsPasswordSetup
+            };
+            
             if (errorMsg) {
-                errorMsg.textContent = 'Username not found';
+                errorMsg.style.display = 'none';
+            }
+            
+            if (passwordSection) {
+                passwordSection.style.display = 'block';
+            }
+            
+            if (data.needsPasswordSetup) {
+                // Show password setup section
+                if (passwordSetupSection) passwordSetupSection.style.display = 'block';
+                if (passwordLoginSection) passwordLoginSection.style.display = 'none';
+                if (loginPasswordInput) {
+                    loginPasswordInput.required = false;
+                    loginPasswordInput.removeAttribute('required');
+                }
+                if (loginSubmitBtn) loginSubmitBtn.textContent = 'Create Password & Login';
+                if (newPasswordSetupInput) {
+                    newPasswordSetupInput.focus();
+                }
+            } else {
+                // Show regular password login
+                if (passwordSetupSection) passwordSetupSection.style.display = 'none';
+                if (passwordLoginSection) passwordLoginSection.style.display = 'block';
+                if (loginPasswordInput) {
+                    loginPasswordInput.required = true;
+                    loginPasswordInput.setAttribute('required', 'required');
+                    loginPasswordInput.focus();
+                }
+                if (loginSubmitBtn) loginSubmitBtn.textContent = 'Login';
+            }
+        })
+        .catch(err => {
+            console.error('Login lookup failed:', err);
+            if (errorMsg) {
+                errorMsg.textContent = 'Unable to verify user. Please try again.';
                 errorMsg.style.display = 'block';
             }
             if (passwordSection) passwordSection.style.display = 'none';
             usernameVerified = false;
             currentLoginUser = null;
-            return false;
-        }
-        
-        console.log('User found:', { username: user.username, name: user.name, hasPasswordHash: !!user.passwordHash, needsPasswordSetup: user.needsPasswordSetup });
-        
-        // Username found - show password section
-        currentLoginUser = user;
-        usernameVerified = true;
-        
-        if (errorMsg) {
-            errorMsg.style.display = 'none';
-        }
-        
-        if (passwordSection) {
-            passwordSection.style.display = 'block';
-        }
-        
-        // Check if user needs password setup
-        if (user.needsPasswordSetup || !user.passwordHash) {
-            // Show password setup section
-            if (passwordSetupSection) passwordSetupSection.style.display = 'block';
-            if (passwordLoginSection) passwordLoginSection.style.display = 'none';
-            if (loginPasswordInput) {
-                loginPasswordInput.required = false;
-                loginPasswordInput.removeAttribute('required');
-            }
-            if (loginSubmitBtn) loginSubmitBtn.textContent = 'Create Password & Login';
-            if (newPasswordSetupInput) {
-                newPasswordSetupInput.focus();
-            }
-        } else {
-            // Show regular password login
-            if (passwordSetupSection) passwordSetupSection.style.display = 'none';
-            if (passwordLoginSection) passwordLoginSection.style.display = 'block';
-            if (loginPasswordInput) {
-                loginPasswordInput.required = true;
-                loginPasswordInput.setAttribute('required', 'required');
-                loginPasswordInput.focus();
-            }
-            if (loginSubmitBtn) loginSubmitBtn.textContent = 'Login';
-        }
+        });
         
         return true;
     }
     
     // Check username on blur or Enter key
-    if (loginUsernameInput) {
-        loginUsernameInput.addEventListener('blur', () => {
-            verifyUsername();
-        });
-        
-        loginUsernameInput.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter' && !usernameVerified) {
-                e.preventDefault();
-                if (verifyUsername()) {
-                    // Focus on password field after username is verified
-                    setTimeout(() => {
-                        if (currentLoginUser && (currentLoginUser.needsPasswordSetup || !currentLoginUser.passwordHash)) {
-                            if (newPasswordSetupInput) newPasswordSetupInput.focus();
-                        } else {
-                            if (loginPasswordInput) loginPasswordInput.focus();
-                        }
-                    }, 100);
-                }
-            }
-        });
-        
-        // Reset when username changes
-        loginUsernameInput.addEventListener('input', () => {
+    if (loginUsernameInput && loginCompanyInput) {
+        function resetVerificationState() {
             if (passwordSection) passwordSection.style.display = 'none';
             if (loginSubmitBtn) loginSubmitBtn.textContent = 'Continue';
             usernameVerified = false;
@@ -1996,7 +2873,36 @@ function setupLogin() {
             }
             const errorMsg = document.getElementById('loginError');
             if (errorMsg) errorMsg.style.display = 'none';
+        }
+        
+        loginUsernameInput.addEventListener('blur', () => {
+            verifyUsername();
         });
+        
+        loginCompanyInput.addEventListener('blur', () => {
+            // Re-verify when company changes
+            resetVerificationState();
+        });
+        
+        loginUsernameInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !usernameVerified) {
+                e.preventDefault();
+                if (verifyUsername()) {
+                    // Focus on password field after username is verified
+                    setTimeout(() => {
+                        if (currentLoginUser && (currentLoginUser.needsPasswordSetup || !currentLoginUser.passwordHash)) {
+                            if (newPasswordSetupInput) newPasswordSetupInput.focus();
+                        } else {
+                            if (loginPasswordInput) loginPasswordInput.focus();
+                        }
+                    }, 100);
+                }
+            }
+        });
+        
+        // Reset when username changes
+        loginUsernameInput.addEventListener('input', resetVerificationState);
+        loginCompanyInput.addEventListener('input', resetVerificationState);
     }
     
     // Only attach submit listener once
@@ -2009,6 +2915,7 @@ function setupLogin() {
             console.log('=== LOGIN FORM SUBMITTED ===');
             
             // Get fresh references to form elements each time
+            const freshLoginCompanyInput = document.getElementById('loginCompany');
             const freshLoginUsernameInput = document.getElementById('loginUsername');
             const freshLoginPasswordInput = document.getElementById('loginPassword');
             const freshNewPasswordSetupInput = document.getElementById('newPasswordSetup');
@@ -2016,12 +2923,13 @@ function setupLogin() {
             const freshPasswordSection = document.getElementById('passwordSection');
             const errorMsg = document.getElementById('loginError');
             
+            const company = freshLoginCompanyInput ? freshLoginCompanyInput.value.trim() : '';
             const username = freshLoginUsernameInput ? freshLoginUsernameInput.value.trim() : '';
             const password = freshLoginPasswordInput ? freshLoginPasswordInput.value : '';
             const newPassword = freshNewPasswordSetupInput ? freshNewPasswordSetupInput.value : '';
             const confirmPassword = freshConfirmPasswordSetupInput ? freshConfirmPasswordSetupInput.value : '';
             
-            console.log('Login attempt:', { username, hasPassword: !!password, hasNewPassword: !!newPassword, usernameVerified, currentLoginUser: !!currentLoginUser });
+            console.log('Login attempt:', { company, username, hasPassword: !!password, hasNewPassword: !!newPassword, usernameVerified, currentLoginUser: !!currentLoginUser });
             
             // Step 1: Verify username if password section is not visible
             const passwordSectionVisible = freshPasswordSection && freshPasswordSection.style.display !== 'none';
@@ -2055,11 +2963,11 @@ function setupLogin() {
                 return;
             }
             
-            const user = currentLoginUser;
-            console.log('Processing login for user:', user.username, 'needsPasswordSetup:', user.needsPasswordSetup, 'hasPasswordHash:', !!user.passwordHash);
+            const userInfo = currentLoginUser;
+            console.log('Processing login for user:', userInfo.username, 'needsPasswordSetup:', userInfo.needsPasswordSetup);
             
             // Check if user needs password setup
-            if (user.needsPasswordSetup || !user.passwordHash) {
+            if (userInfo.needsPasswordSetup) {
                 console.log('User needs password setup');
                 // Handle password setup
                 if (!newPassword || newPassword.length < 8) {
@@ -2078,23 +2986,62 @@ function setupLogin() {
                     return;
                 }
                 
-                console.log('Setting password for user');
-                // Set password
-                user.passwordHash = hashPassword(newPassword);
-                user.needsPasswordSetup = false;
-                saveState();
+                console.log('Setting password via backend and logging in');
                 
-                // Clear password setup fields
-                if (freshNewPasswordSetupInput) freshNewPasswordSetupInput.value = '';
-                if (freshConfirmPasswordSetupInput) freshConfirmPasswordSetupInput.value = '';
+                apiFetch('/api/auth/complete-setup', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        company,
+                        username,
+                        newPassword
+                    })
+                })
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(result => {
+                    if (!result.ok) {
+                        throw new Error(result.data && result.data.error ? result.data.error : 'Failed to complete setup');
+                    }
+                    const { token, user } = result.data;
+                    authToken = token;
+                    localStorage.setItem('dealOrbit_authToken', authToken);
+                    currentUser = user;
+                    localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
+                    
+                    // Clear password setup fields
+                    if (freshNewPasswordSetupInput) freshNewPasswordSetupInput.value = '';
+                    if (freshConfirmPasswordSetupInput) freshConfirmPasswordSetupInput.value = '';
+                    
+                    console.log('Password set, proceeding to load state and show control center');
+                    return loadStateFromServer();
+                })
+                .then(() => {
+                    showControlCenter();
+                    applyRoleBasedAccess();
+                    startPollingSync();
+                    
+                    // Reset form
+                    resetLoginForm();
+                    loginForm.reset();
+                    if (errorMsg) errorMsg.style.display = 'none';
+                    
+                    // Scroll to control center
+                    window.location.href = '#appContainer';
+                    setTimeout(() => {
+                        document.getElementById('appContainer')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                })
+                .catch(err => {
+                    console.error('Complete setup failed:', err);
+                    if (errorMsg) {
+                        errorMsg.textContent = err.message || 'Failed to complete setup. Please try again.';
+                        errorMsg.style.display = 'block';
+                    }
+                });
                 
-                // Password created successfully, proceed directly to login
-                // Skip password verification since we just set it
-                currentLoginUser = user;
-                console.log('Password set, proceeding to login');
+                return;
             } else {
-                console.log('User has password, verifying');
-                // User already has password - verify it
+                console.log('User has password, logging in via backend');
+                // User already has password - verify it via backend
                 if (!password) {
                     if (errorMsg) {
                         errorMsg.textContent = 'Please enter your password';
@@ -2103,53 +3050,54 @@ function setupLogin() {
                     return;
                 }
                 
-                const hashedPassword = hashPassword(password);
-                console.log('Password verification:', { 
-                    enteredPassword: password, 
-                    enteredHash: hashedPassword, 
-                    storedHash: user.passwordHash,
-                    match: user.passwordHash === hashedPassword
-                });
-                if (user.passwordHash !== hashedPassword) {
-                    console.error('Password verification failed', { 
-                        stored: user.passwordHash, 
-                        entered: hashedPassword,
-                        enteredPassword: password
-                    });
+                apiFetch('/api/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        company,
+                        username,
+                        password
+                    })
+                })
+                .then(response => response.json().then(data => ({ ok: response.ok, data })))
+                .then(result => {
+                    if (!result.ok) {
+                        throw new Error(result.data && result.data.error ? result.data.error : 'Login failed');
+                    }
+                    const { token, user } = result.data;
+                    authToken = token;
+                    localStorage.setItem('dealOrbit_authToken', authToken);
+                    currentUser = user;
+                    localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
+                    
+                    console.log('Login successful, loading state from server');
+                    return loadStateFromServer();
+                })
+                .then(() => {
+                    showControlCenter();
+                    applyRoleBasedAccess();
+                    startPollingSync();
+                    
+                    // Reset form
+                    resetLoginForm();
+                    loginForm.reset();
+                    if (errorMsg) errorMsg.style.display = 'none';
+                    
+                    // Scroll to control center
+                    window.location.href = '#appContainer';
+                    setTimeout(() => {
+                        document.getElementById('appContainer')?.scrollIntoView({ behavior: 'smooth' });
+                    }, 100);
+                })
+                .catch(err => {
+                    console.error('Login failed:', err);
                     if (errorMsg) {
-                        errorMsg.textContent = 'Invalid username or password';
+                        errorMsg.textContent = err.message || 'Invalid username, dealership, or password';
                         errorMsg.style.display = 'block';
                     }
-                    return;
-                }
-                console.log('Password verified successfully');
+                });
+                
+                return;
             }
-            
-            // Password is correct, complete login
-            console.log('Completing login');
-            currentUser = {
-                id: user.id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                company: user.company,
-                username: user.username
-            };
-            
-            saveState();
-            showControlCenter();
-            applyRoleBasedAccess();
-            
-            // Reset form
-            resetLoginForm();
-            loginForm.reset();
-            if (errorMsg) errorMsg.style.display = 'none';
-            
-            // Scroll to control center
-            window.location.href = '#appContainer';
-            setTimeout(() => {
-                document.getElementById('appContainer')?.scrollIntoView({ behavior: 'smooth' });
-            }, 100);
         });
         loginForm.dataset.submitHandlerAttached = 'true';
     }
@@ -2226,8 +3174,18 @@ function resetLoginForm() {
 }
 
 function logout() {
+    // Inform backend (best-effort)
+    apiFetch('/api/auth/logout', {
+        method: 'POST'
+    }).catch(() => {
+        // Ignore errors on logout
+    });
+    
+    authToken = null;
     currentUser = null;
+    localStorage.removeItem('dealOrbit_authToken');
     localStorage.removeItem('dealOrbit_currentUser');
+    
     resetLoginForm();
     showLogin();
     window.location.href = '#login';
@@ -2527,6 +3485,7 @@ function setupSignup() {
         
         const name = document.getElementById('signupName').value.trim();
         const email = document.getElementById('signupEmail').value.trim();
+        const username = document.getElementById('signupUsername').value.trim();
         const company = document.getElementById('signupCompany').value.trim();
         const phone = document.getElementById('signupPhone').value.trim();
         const role = document.getElementById('signupRole').value;
@@ -2535,7 +3494,7 @@ function setupSignup() {
         const errorMsg = document.getElementById('signupError');
         
         // Validation
-        if (!name || !email || !company || !role || !password) {
+        if (!name || !email || !company || !role || !password || !username) {
             if (errorMsg) {
                 errorMsg.textContent = 'Please fill in all required fields';
                 errorMsg.style.display = 'block';
@@ -2559,55 +3518,63 @@ function setupSignup() {
             return;
         }
         
-        // Check if email already exists
-        if (users.find(u => u.email.toLowerCase() === email.toLowerCase())) {
+        // Call backend to create a new rooftop + admin user
+        apiFetch('/api/auth/signup', {
+            method: 'POST',
+            body: JSON.stringify({
+                name,
+                email,
+                company,
+                phone,
+                role,
+                username,
+                password
+            })
+        })
+        .then(response => response.json().then(data => ({ ok: response.ok, data })))
+        .then(result => {
+            if (!result.ok) {
+                const msg = result.data && result.data.error ? result.data.error : 'Failed to create account';
+                if (errorMsg) {
+                    errorMsg.textContent = msg;
+                    errorMsg.style.display = 'block';
+                }
+                return;
+            }
+            
+            const { token, user } = result.data;
+            authToken = token;
+            localStorage.setItem('dealOrbit_authToken', authToken);
+            currentUser = user;
+            localStorage.setItem('dealOrbit_currentUser', JSON.stringify(currentUser));
+            
+            // Initial state will be loaded from server
+            return loadStateFromServer().then(() => {
+                alert('Account created successfully!');
+                showControlCenter();
+                applyRoleBasedAccess();
+                
+                // Clear form
+                signupForm.reset();
+                if (errorMsg) errorMsg.style.display = 'none';
+                
+                // Start polling for shared updates
+                startPollingSync();
+                
+                // Scroll to control center
+                window.location.href = '#appContainer';
+                setTimeout(() => {
+                    document.getElementById('appContainer')?.scrollIntoView({ behavior: 'smooth' });
+                }, 100);
+            });
+        })
+        .catch(err => {
+            console.error('Signup failed:', err);
             if (errorMsg) {
-                errorMsg.textContent = 'An account with this email already exists';
+                errorMsg.textContent = 'Failed to create account. Please try again.';
                 errorMsg.style.display = 'block';
             }
-            return;
-        }
-        
-        // Create user
-        const newUser = {
-            id: 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9),
-            name,
-            email,
-            username: '', // Username will be set by admin in user management
-            company,
-            phone,
-            role,
-            passwordHash: hashPassword(password),
-            createdAt: new Date().toISOString()
-        };
-        
-        users.push(newUser);
-        saveState();
-        
-        // Auto-login
-        currentUser = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            role: newUser.role,
-            company: newUser.company,
-            username: newUser.username
-        };
-        saveState();
-        
-        alert('Account created successfully!');
-        showControlCenter();
-        applyRoleBasedAccess();
-        
-        // Clear form
-        signupForm.reset();
-        if (errorMsg) errorMsg.style.display = 'none';
-        
-        // Scroll to control center
-        window.location.href = '#appContainer';
-        setTimeout(() => {
-            document.getElementById('appContainer')?.scrollIntoView({ behavior: 'smooth' });
-        }, 100);
+        });
     });
 }
 
@@ -2721,6 +3688,26 @@ function sendSMSNotification(phone, message) {
 }
 
 // Apply role-based access control
+// Update deals table headers based on user role
+function updateDealsTableHeaders() {
+    const dealsTable = document.getElementById('dealsTable');
+    if (!dealsTable) return;
+    
+    const headerRow = dealsTable.querySelector('thead tr');
+    if (!headerRow) return;
+    
+    const headers = headerRow.querySelectorAll('th');
+    const paymentOutIndex = 10; // Payment Out is the 11th column (0-indexed = 10)
+    
+    if (headers[paymentOutIndex] && headers[paymentOutIndex].textContent.includes('Payment Out')) {
+        if (canViewPaymentOut()) {
+            headers[paymentOutIndex].style.display = '';
+        } else {
+            headers[paymentOutIndex].style.display = 'none';
+        }
+    }
+}
+
 function applyRoleBasedAccess() {
     if (!currentUser) return;
     
@@ -2798,6 +3785,20 @@ function applyRoleBasedAccess() {
             aiChatbot.style.display = 'none';
         }
     }
+    
+    // Hide Payment Out fields for Desk Managers
+    const paymentOutLabel = document.querySelector('label:has(#paymentOut)');
+    const paymentOutInput = document.getElementById('paymentOut');
+    if (canViewPaymentOut()) {
+        if (paymentOutLabel) paymentOutLabel.style.display = 'block';
+        if (paymentOutInput) paymentOutInput.closest('label').style.display = 'block';
+    } else {
+        if (paymentOutLabel) paymentOutLabel.style.display = 'none';
+        if (paymentOutInput) paymentOutInput.closest('label').style.display = 'none';
+    }
+    
+    // Hide Payment Out column header in deals table for Desk Managers
+    updateDealsTableHeaders();
 }
 
 // ===== AI CHATBOT FUNCTIONALITY =====

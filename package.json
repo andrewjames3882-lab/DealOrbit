@@ -1,0 +1,19 @@
+{
+  "name": "dealorbit-sync",
+  "version": "1.0.0",
+  "description": "WebSocket server for DealOrbit real-time synchronization",
+  "main": "ws-server.js",
+  "scripts": {
+    "start": "node ws-server.js",
+    "install-deps": "npm install"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
+
+
+

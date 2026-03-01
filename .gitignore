@@ -2,6 +2,7 @@
 .DS_Store
 .AppleDouble
 .LSOverride
+._*
 
 # Temporary files
 *.log
@@ -26,3 +27,12 @@ ngrok.zip
 .idea/
 *.sublime-*
 
+
+
+
+
+
+
+node_modules
+nodejs-temp
+node.tar.gz
