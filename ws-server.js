@@ -14,7 +14,7 @@ const path = require('path');
 const url = require('url');
 const crypto = require('crypto');
 
-const PORT = 8000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 8000;
 let sharedState = null; // kept for backward-compat WebSocket messages (not used by API)
 let connectedClients = new Set();
 
